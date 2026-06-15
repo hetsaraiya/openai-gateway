@@ -1,0 +1,36 @@
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "60", "1", "--appendonly", "no"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  gateway:
+    # Build locally, or pull the published image instead:
+    #   image: ghcr.io/OWNER/openai-gateway:latest
+    build: .
+    restart: unless-stopped
+    env_file: .env              # GATEWAY_API_KEY etc. — injected at runtime, never baked
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      AUTH_DIR: /auth
+    volumes:
+      # Read-write bind mount: the gateway refreshes OAuth tokens and writes the
+      # rotated values back, so this must be writable and persistent.
+      # The container runs as uid 10001 — make the host dir match, e.g.:
+      #   sudo chown -R 10001:10001 ./auth && chmod 700 ./auth
+      - ./auth:/auth
+    ports:
+      - "8000:8000"
+    depends_on:
+      redis:
+        condition: service_healthy
+
+volumes:
+  redis-data:

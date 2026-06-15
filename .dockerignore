@@ -1,0 +1,25 @@
+# --- secrets: must never enter the build context or image layers ---
+auth/
+*.json
+.env
+*.env
+!.env.example
+
+# --- python / project cruft ---
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+
+# --- vcs / ci / docs / tests (not needed at runtime) ---
+.git/
+.github/
+.gitignore
+tests/
+*.md
+docker-compose.yml
+Dockerfile
+.dockerignore
+.DS_Store
