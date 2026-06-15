@@ -52,7 +52,9 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          # Uses a classic PAT with write:packages if the GHCR_PAT secret is set
+          # (bypasses package/repo linkage issues); otherwise the built-in token.
+          password: ${{ secrets.GHCR_PAT || secrets.GITHUB_TOKEN }}
 
       - name: Derive tags and labels
         id: meta
