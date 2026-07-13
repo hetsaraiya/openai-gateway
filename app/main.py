@@ -17,6 +17,7 @@ import logging
 import time
 from contextlib import asynccontextmanager
 from typing import Callable
+from uuid import uuid4
 
 import httpx
 from fastapi import Depends, FastAPI, Request
@@ -38,6 +39,7 @@ from .models import (
     AccountStatus,
     ChatCompletionRequest,
     HealthResponse,
+    OpenCodeGoKeyCreate,
     ResponsesRequest,
     StatusResponse,
 )
@@ -298,6 +300,39 @@ async def delete_account(account_id: str, request: Request) -> Response:
         return _error(404, f"no account '{account_id}'", "account_not_found")
     log.info("account %s deleted via API", account_id)
     return JSONResponse({"status": "ok", "account": account_id, "deleted": True})
+
+
+@app.post("/v1/admin/opencode-go/keys", dependencies=[Depends(require_master_key)])
+async def add_opencode_go_key(payload: OpenCodeGoKeyCreate, request: Request) -> Response:
+    """Persist and hot-load an OpenCode Go subscription API key.
+
+    Credentials use the existing account-file storage so a key added here is
+    available after a restart. Supplying an existing ``identifier`` replaces
+    that key; omitting it creates a generated identifier.
+    """
+    s = request.app.state
+    account_id = payload.identifier or f"opencode-go-{uuid4().hex}"
+    if not valid_account_id(account_id):
+        return _error(400, "invalid identifier: use letters, digits, '.', '_', '-'",
+                      "invalid_account_id", "invalid_request_error")
+
+    data = {"type": "opencode-go", "api_key": payload.api_key}
+    if payload.label:
+        data["label"] = payload.label
+    try:
+        acct = save_account_file(s.settings, account_id, data)
+    except CredentialError as exc:
+        return _error(400, str(exc), "invalid_api_key", "invalid_request_error")
+
+    replaced = s.router.add_account(acct)
+    log.info("OpenCode Go key %s %s via API", account_id, "replaced" if replaced else "added")
+    return JSONResponse(status_code=200 if replaced else 201, content={
+        "status": "ok",
+        "id": account_id,
+        "label": payload.label,
+        "replaced": replaced,
+        "provider": "opencode-go",
+    })
 
 
 @app.get("/v1/models", dependencies=[Depends(require_master_key)])

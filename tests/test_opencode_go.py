@@ -4,6 +4,7 @@ import httpx
 import pytest
 
 from app.credentials import CredentialError, OpenCodeGoAccount, load_accounts, save_account_file
+from app.main import app
 from app.model_catalog import ModelCatalog
 from app.proxy import OpenCodeGoProxy
 from app.router import AccountRouter
@@ -28,6 +29,56 @@ def test_rejects_unsafe_opencode_go_api_key(tmp_path):
 
     with pytest.raises(CredentialError):
         save_account_file(settings, "bad", {"type": "opencode-go", "api_key": "bad key"})
+
+
+@pytest.mark.asyncio
+async def test_admin_api_adds_and_persists_opencode_go_key(tmp_path, quota, monkeypatch):
+    """The dedicated key endpoint is master-key protected and hot-loads keys."""
+    settings = make_settings(auth_dir=str(tmp_path))
+    monkeypatch.setattr("app.auth.get_settings", lambda: settings)
+    app.state.settings = settings
+    app.state.router = AccountRouter(settings, [], quota)
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        denied = await client.post(
+            "/v1/admin/opencode-go/keys",
+            json={"api_key": "go_test_123456"},
+        )
+        assert denied.status_code == 401
+
+        created = await client.post(
+            "/v1/admin/opencode-go/keys",
+            headers={"X-Gateway-Key": "test-master"},
+            json={
+                "api_key": "go_test_123456",
+                "identifier": "go-primary",
+                "label": "Primary Go subscription",
+            },
+        )
+        assert created.status_code == 201
+        assert created.json() == {
+            "status": "ok",
+            "id": "go-primary",
+            "label": "Primary Go subscription",
+            "replaced": False,
+            "provider": "opencode-go",
+        }
+
+        replaced = await client.post(
+            "/v1/admin/opencode-go/keys",
+            headers={"Authorization": "Bearer test-master"},
+            json={"api_key": "go_replacement_987654", "identifier": "go-primary"},
+        )
+
+    assert replaced.status_code == 200
+    assert replaced.json()["replaced"] is True
+    stored = json.loads((tmp_path / "go-primary.json").read_text())
+    assert stored == {"type": "opencode-go", "api_key": "go_replacement_987654"}
+    accounts = app.state.router.accounts()
+    assert len(accounts) == 1
+    assert accounts[0].id == "go-primary"
+    assert accounts[0].access_token == "go_replacement_987654"
 
 
 @pytest.mark.asyncio

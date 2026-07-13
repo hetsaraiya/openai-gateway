@@ -172,6 +172,9 @@ and real environment variables override it. See [`.env.example`](.env.example).
   router with no restart. `201` created / `200` replaced.
 - `DELETE /admin/accounts/{id}` — remove an account from the router and delete
   its `auth.json`.
+- `POST /v1/admin/opencode-go/keys` — persist and hot-load an OpenCode Go
+  subscription API key. Takes `api_key`, plus optional `identifier` and `label`.
+  This endpoint is protected by the gateway master key.
 - `GET /dashboard` — visual dashboard for active gateways and available models.
   Enter the gateway master key in the page; live data is read from authenticated
   `GET /dashboard/data`.
@@ -189,6 +192,11 @@ curl -X PUT http://localhost:8000/admin/accounts/dodiya \
 curl -X PUT http://localhost:8000/admin/accounts/go-main \
   -H "X-Gateway-Key: $GATEWAY_API_KEY" -H "Content-Type: application/json" \
   --data '{"type":"opencode-go","api_key":"'"$OPENCODE_GO_API_KEY"'"}'
+
+# add an OpenCode Go key (stored in AUTH_DIR and loaded without a restart)
+curl -X POST http://localhost:8000/v1/admin/opencode-go/keys \
+  -H "X-Gateway-Key: $GATEWAY_API_KEY" -H "Content-Type: application/json" \
+  --data '{"api_key":"'"$OPENCODE_GO_API_KEY"'","identifier":"go-main","label":"Primary Go subscription"}'
 
 # delete an account
 curl -X DELETE http://localhost:8000/admin/accounts/dodiya \
