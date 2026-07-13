@@ -35,6 +35,7 @@ class ResponsesRequest(BaseModel):
 
 class AccountStatus(BaseModel):
     id: str
+    provider: str = "codex"
     account_id: Optional[str] = None
     plan: Optional[str] = None
     access_token: str  # masked
