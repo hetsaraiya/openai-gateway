@@ -82,3 +82,21 @@ jobs:
           sbom: true
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  deploy:
+    needs: build-and-push
+    # Only redeploy after publishing the default branch image, never for PRs or tags.
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger hetnanu deploy hook
+        env:
+          DEPLOY_TOKEN: ${{ secrets.DEPLOY_TOKEN }}
+        run: |
+          if [ -z "$DEPLOY_TOKEN" ]; then
+            echo "DEPLOY_TOKEN secret not set — image is published, skipping remote redeploy." >&2
+            exit 0
+          fi
+          curl -fsS -X POST \
+            "https://deploy.hetsaraiya.com/hooks/deploy?service=openai-gateway" \
+            -H "X-Deploy-Token: $DEPLOY_TOKEN"
