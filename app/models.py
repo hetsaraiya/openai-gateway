@@ -33,6 +33,21 @@ class ResponsesRequest(BaseModel):
     stream: bool = Field(default=False, description="Stream the response as SSE.")
 
 
+class OpenCodeGoKeyCreate(BaseModel):
+    """A subscription API key to add to the OpenCode Go account pool."""
+
+    api_key: str = Field(description="OpenCode Go subscription API key.")
+    identifier: Optional[str] = Field(
+        default=None,
+        description="Optional stable, filename-safe identifier for this key.",
+    )
+    label: Optional[str] = Field(
+        default=None,
+        max_length=128,
+        description="Optional human-readable label stored with this key.",
+    )
+
+
 class AccountStatus(BaseModel):
     id: str
     provider: str = "codex"
