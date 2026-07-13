@@ -97,6 +97,8 @@ jobs:
             echo "DEPLOY_TOKEN secret not set — image is published, skipping remote redeploy." >&2
             exit 0
           fi
-          curl -fsS -X POST \
+          curl --fail-with-body -sS -X POST \
             "https://deploy.hetsaraiya.com/hooks/deploy?service=openai-gateway" \
-            -H "X-Deploy-Token: $DEPLOY_TOKEN"
+            -H "X-Deploy-Token: $DEPLOY_TOKEN" \
+            -H "Content-Type: application/json" \
+            --data '{}'
