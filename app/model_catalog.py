@@ -18,7 +18,7 @@ import httpx
 
 from .config import Settings
 from .credentials import CredentialError
-from .proxy import build_codex_headers
+from .proxy import OPENCODE_GO_MODEL_PREFIX, build_codex_headers, build_opencode_go_headers
 from .router import AccountRouter, NoAccountAvailable
 
 log = logging.getLogger("gateway.models")
@@ -37,6 +37,7 @@ class ModelCatalog:
         self._client = client
         self._lock = asyncio.Lock()
         self._raw: list[dict] = []          # raw ModelInfo objects from the backend
+        self._opencode_go_raw: list[dict] = []
         self._etag: Optional[str] = None
         self._fetched_at: float = 0.0
 
@@ -57,7 +58,7 @@ class ModelCatalog:
 
     async def _fetch(self) -> None:
         try:
-            candidates = await self._router.candidates()
+            candidates = await self._router.candidates("codex")
         except NoAccountAvailable as exc:
             if self._raw:
                 log.warning("model catalog: no account available, serving stale cache (%s)", exc)
@@ -120,8 +121,16 @@ class ModelCatalog:
         return [m for m in self._raw if m.get("visibility", "list") == "list" and m.get("slug")]
 
     async def openai_list(self) -> dict:
-        await self._ensure()
-        data = [self._to_openai(m) for m in self._visible()]
+        codex_error: Optional[ModelCatalogError] = None
+        data: list[dict] = []
+        try:
+            await self._ensure()
+            data.extend(self._to_openai(m) for m in self._visible())
+        except ModelCatalogError as exc:
+            codex_error = exc
+        data.extend(await self._opencode_go_models())
+        if not data and codex_error:
+            raise codex_error
         return {"object": "list", "data": data}
 
     async def default_model(self) -> Optional[str]:
@@ -134,3 +143,51 @@ class ModelCatalog:
         # input order for ties / missing values.
         visible.sort(key=lambda m: m.get("priority", 1_000_000))
         return visible[0].get("slug")
+
+    async def _opencode_go_models(self) -> list[dict]:
+        try:
+            candidates = await self._router.candidates("opencode-go")
+        except NoAccountAvailable:
+            return []
+
+        last_error = ""
+        for acct in candidates:
+            try:
+                resp = await self._client.get(
+                    f"{self._settings.opencode_go_base_url}/models",
+                    headers=build_opencode_go_headers(acct, stream=False),
+                    timeout=30.0,
+                )
+            except httpx.HTTPError as exc:
+                last_error = f"{acct.id}: {exc}"
+                continue
+
+            if resp.status_code == 200:
+                models = (resp.json() or {}).get("data") or (resp.json() or {}).get("models") or []
+                self._opencode_go_raw = models
+                return [self._opencode_to_openai(m) for m in models if m.get("id") or m.get("slug")]
+            if resp.status_code in _RETRYABLE:
+                last_error = f"{acct.id}: HTTP {resp.status_code}"
+                continue
+            last_error = f"{acct.id}: HTTP {resp.status_code} {resp.text[:200]}"
+
+        if self._opencode_go_raw:
+            log.warning("OpenCode Go model refresh failed (%s); serving stale cache", last_error)
+            return [self._opencode_to_openai(m) for m in self._opencode_go_raw if m.get("id") or m.get("slug")]
+        log.warning("OpenCode Go models unavailable (%s)", last_error or "no attempts")
+        return []
+
+    @staticmethod
+    def _opencode_to_openai(m: dict) -> dict:
+        model_id = m.get("id") or m.get("slug")
+        return {
+            "id": f"{OPENCODE_GO_MODEL_PREFIX}{model_id}",
+            "object": "model",
+            "created": m.get("created", 0),
+            "owned_by": m.get("owned_by") or "opencode-go",
+            "display_name": m.get("name") or m.get("display_name") or model_id,
+            "description": m.get("description"),
+            "context_window": m.get("context_window"),
+            "supported_in_api": True,
+            "gateway": "opencode-go",
+        }

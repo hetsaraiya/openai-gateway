@@ -159,6 +159,8 @@ and real environment variables override it. See [`.env.example`](.env.example).
 | `CODEX_BASE_URL` | `https://chatgpt.com/backend-api/codex` | Upstream backend |
 | `OAUTH_TOKEN_URL` | `https://auth.openai.com/oauth/token` | Token refresh endpoint |
 | `CODEX_CLIENT_ID` | Codex CLI default | OAuth client id for refresh |
+| `OPENCODE_GO_API_KEYS` | _(empty)_ | Optional comma-separated OpenCode Go subscription API keys |
+| `OPENCODE_GO_BASE_URL` | `https://opencode.ai/zen/go/v1` | OpenCode Go OpenAI-compatible endpoint |
 
 ## Operational endpoints
 
@@ -170,6 +172,9 @@ and real environment variables override it. See [`.env.example`](.env.example).
   router with no restart. `201` created / `200` replaced.
 - `DELETE /admin/accounts/{id}` — remove an account from the router and delete
   its `auth.json`.
+- `GET /dashboard` — visual dashboard for active gateways and available models.
+  Enter the gateway master key in the page; live data is read from authenticated
+  `GET /dashboard/data`.
 
 ```bash
 # status
@@ -180,6 +185,11 @@ curl -X PUT http://localhost:8000/admin/accounts/dodiya \
   -H "X-Gateway-Key: $GATEWAY_API_KEY" -H "Content-Type: application/json" \
   --data-binary @~/.codex/auth.json
 
+# upload / replace an OpenCode Go subscription key
+curl -X PUT http://localhost:8000/admin/accounts/go-main \
+  -H "X-Gateway-Key: $GATEWAY_API_KEY" -H "Content-Type: application/json" \
+  --data '{"type":"opencode-go","api_key":"'"$OPENCODE_GO_API_KEY"'"}'
+
 # delete an account
 curl -X DELETE http://localhost:8000/admin/accounts/dodiya \
   -H "X-Gateway-Key: $GATEWAY_API_KEY"
@@ -189,6 +199,11 @@ The gateway can boot with **zero** accounts and have them uploaded via the API
 (requests `503` until at least one exists). Each Codex account must be used by
 **only this gateway** — rotating refresh tokens get invalidated if the same
 account is refreshed elsewhere.
+
+OpenCode Go accounts are API-key based. Configure them with
+`OPENCODE_GO_API_KEYS` or upload a credential JSON as shown above. Models are
+listed as `opencode-go/<model-id>` (for example `opencode-go/glm-5.2`) and are
+served through `/v1/chat/completions`. `/v1/responses` remains Codex-only.
 
 ## Tests
 

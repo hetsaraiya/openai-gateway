@@ -20,7 +20,7 @@ from typing import Callable
 
 import httpx
 from fastapi import Depends, FastAPI, Request
-from fastapi.responses import JSONResponse, Response, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 
 from . import __version__
 from .auth import require_master_key
@@ -42,7 +42,7 @@ from .models import (
     StatusResponse,
 )
 from .observability import configure_logging, log_access, new_request_id, request_id_var
-from .proxy import AllAccountsFailed, CodexProxy
+from .proxy import AllAccountsFailed, CodexProxy, OpenCodeGoProxy, is_opencode_go_model
 from .quota import QuotaStore
 from .router import AccountRouter, NoAccountAvailable
 from .translate import (
@@ -69,6 +69,7 @@ async def lifespan(app: FastAPI):
     router = AccountRouter(settings, accounts, quota)
     client = httpx.AsyncClient(http2=True, timeout=settings.request_timeout)
     proxy = CodexProxy(settings, router, client)
+    opencode_go_proxy = OpenCodeGoProxy(settings, router, client)
     catalog = ModelCatalog(settings, router, client)
 
     app.state.settings = settings
@@ -76,12 +77,13 @@ async def lifespan(app: FastAPI):
     app.state.quota = quota
     app.state.dedup = dedup
     app.state.proxy = proxy
+    app.state.opencode_go_proxy = opencode_go_proxy
     app.state.catalog = catalog
     app.state.client = client
 
     redis_ok = await quota.ping()
     log.info(
-        "gateway up: %d Codex accounts, strategy=%s, redis=%s",
+        "gateway up: %d accounts, strategy=%s, redis=%s",
         len(accounts), settings.strategy, "ok" if redis_ok else "DOWN",
     )
     try:
@@ -117,6 +119,88 @@ def _error(status: int, message: str, code: str, etype: str = "gateway_error") -
     return JSONResponse(status_code=status, content={
         "error": {"message": message, "type": etype, "code": code}
     })
+
+
+def _dashboard_html() -> str:
+    return """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Gateway Dashboard</title>
+  <style>
+    :root { color-scheme: light dark; --bg:#f7f8fa; --panel:#ffffff; --ink:#16202a; --muted:#647080; --line:#d9dee5; --ok:#0d7a4f; --warn:#b35c00; --chip:#eef2f6; }
+    @media (prefers-color-scheme: dark) { :root { --bg:#111418; --panel:#191f26; --ink:#edf2f7; --muted:#9aa6b2; --line:#303943; --chip:#242c35; } }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background:var(--bg); color:var(--ink); }
+    header { border-bottom:1px solid var(--line); background:var(--panel); }
+    .wrap { max-width:1180px; margin:0 auto; padding:20px; }
+    .top { display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; }
+    h1 { font-size:24px; line-height:1.2; margin:0; letter-spacing:0; }
+    h2 { font-size:16px; margin:0 0 12px; letter-spacing:0; }
+    .auth { display:flex; gap:8px; min-width:min(100%, 440px); }
+    input { flex:1; min-width:180px; padding:10px 12px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--ink); }
+    button { padding:10px 14px; border:1px solid var(--line); border-radius:6px; background:var(--ink); color:var(--panel); cursor:pointer; }
+    main.wrap { display:grid; grid-template-columns: 1fr 1fr; gap:16px; }
+    section { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:16px; min-width:0; }
+    .wide { grid-column:1 / -1; }
+    .stats { display:grid; grid-template-columns:repeat(4, minmax(120px, 1fr)); gap:12px; }
+    .stat { border:1px solid var(--line); border-radius:8px; padding:12px; background:var(--bg); }
+    .label { color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.04em; }
+    .value { font-size:22px; font-weight:700; margin-top:4px; overflow-wrap:anywhere; }
+    table { width:100%; border-collapse:collapse; table-layout:fixed; }
+    th, td { padding:10px 8px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top; overflow-wrap:anywhere; }
+    th { color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.04em; }
+    .pill { display:inline-flex; align-items:center; gap:6px; padding:3px 8px; border-radius:999px; background:var(--chip); font-size:12px; }
+    .dot { width:8px; height:8px; border-radius:50%; background:var(--warn); }
+    .dot.ok { background:var(--ok); }
+    .muted { color:var(--muted); }
+    .error { color:#b3261e; }
+    @media (max-width: 780px) { main.wrap { grid-template-columns:1fr; } .stats { grid-template-columns:repeat(2, minmax(0, 1fr)); } .auth { width:100%; } }
+  </style>
+</head>
+<body>
+  <header><div class="wrap top"><h1>Gateway Dashboard</h1><form class="auth" id="auth"><input id="key" type="password" autocomplete="current-password" placeholder="Gateway API key"><button type="submit">Refresh</button></form></div></header>
+  <main class="wrap">
+    <section class="wide"><div class="stats" id="stats"></div><p class="muted" id="message"></p></section>
+    <section><h2>Active Gateways</h2><table><thead><tr><th>ID</th><th>Provider</th><th>Plan</th><th>Status</th></tr></thead><tbody id="gateways"></tbody></table></section>
+    <section><h2>Available Models</h2><table><thead><tr><th>Model</th><th>Gateway</th><th>Context</th></tr></thead><tbody id="models"></tbody></table></section>
+  </main>
+  <script>
+    const keyInput = document.querySelector("#key");
+    const form = document.querySelector("#auth");
+    const stats = document.querySelector("#stats");
+    const gateways = document.querySelector("#gateways");
+    const models = document.querySelector("#models");
+    const message = document.querySelector("#message");
+    keyInput.value = sessionStorage.getItem("gatewayKey") || "";
+    function cell(value) {
+      return String(value ?? "").replace(/[&<>"']/g, ch => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[ch]));
+    }
+    function gatewayLabel(model) {
+      return model.gateway || ((model.id || "").startsWith("opencode-go/") ? "opencode-go" : "codex");
+    }
+    function stat(label, value) { return `<div class="stat"><div class="label">${label}</div><div class="value">${cell(value)}</div></div>`; }
+    async function load() {
+      const key = keyInput.value.trim();
+      if (!key) { message.textContent = "Enter the gateway API key to load live data."; return; }
+      sessionStorage.setItem("gatewayKey", key);
+      message.textContent = "Loading...";
+      const res = await fetch("/dashboard/data", { headers: { "X-Gateway-Key": key } });
+      if (!res.ok) { message.textContent = `Could not load dashboard data (${res.status}).`; return; }
+      const data = await res.json();
+      const active = data.gateways.filter(g => g.active).length;
+      stats.innerHTML = stat("Accounts", data.gateways.length) + stat("Active", active) + stat("Models", data.models.length) + stat("Strategy", data.status.strategy);
+      gateways.innerHTML = data.gateways.map(g => `<tr><td>${cell(g.id)}</td><td>${cell(g.provider)}</td><td>${cell(g.plan)}</td><td><span class="pill"><span class="dot ${g.active ? "ok" : ""}"></span>${g.active ? "active" : "cooldown"}</span></td></tr>`).join("") || `<tr><td colspan="4" class="muted">No gateways configured</td></tr>`;
+      models.innerHTML = data.models.map(m => `<tr><td>${cell(m.id)}</td><td>${cell(gatewayLabel(m))}</td><td>${cell(m.context_window || m.max_context_window || "")}</td></tr>`).join("") || `<tr><td colspan="3" class="muted">No models available</td></tr>`;
+      message.className = data.model_error ? "error" : "muted";
+      message.textContent = data.model_error || `Last updated ${new Date().toLocaleTimeString()}`;
+    }
+    form.addEventListener("submit", event => { event.preventDefault(); load().catch(err => { message.textContent = err.message; }); });
+    if (keyInput.value) load().catch(err => { message.textContent = err.message; });
+  </script>
+</body>
+</html>"""
 
 
 async def _passthrough_error(acct_id: str, upstream: httpx.Response) -> Response:
@@ -161,7 +245,8 @@ async def admin_status(request: Request) -> StatusResponse:
     rows = []
     for acct in s.router.accounts():
         rows.append(AccountStatus(
-            id=acct.id, account_id=acct.account_id, plan=acct.plan,
+            id=acct.id, provider=getattr(acct, "provider", "codex"),
+            account_id=acct.account_id, plan=acct.plan,
             access_token=acct.masked_token(), expires_at=acct.expires_at(),
             used_today=await s.quota.used_today(acct.id),
             cooling_down=await s.quota.is_cooling_down(acct.id),
@@ -196,6 +281,7 @@ async def upload_account(account_id: str, request: Request) -> Response:
     log.info("account %s %s via API", account_id, "replaced" if replaced else "added")
     return JSONResponse(status_code=200 if replaced else 201, content={
         "status": "ok", "account": account_id, "replaced": replaced,
+        "provider": getattr(acct, "provider", "codex"),
         "account_id": acct.account_id, "plan": acct.plan, "expires_at": acct.expires_at(),
     })
 
@@ -221,6 +307,38 @@ async def list_models(request: Request) -> Response:
         return JSONResponse(await request.app.state.catalog.openai_list())
     except ModelCatalogError as exc:
         return _error(502, f"could not fetch models: {exc}", "models_unavailable")
+
+
+@app.get("/dashboard", response_class=HTMLResponse)
+async def dashboard() -> HTMLResponse:
+    return HTMLResponse(_dashboard_html())
+
+
+@app.get("/dashboard/data", dependencies=[Depends(require_master_key)])
+async def dashboard_data(request: Request) -> Response:
+    s = request.app.state
+    status = await admin_status(request)
+    try:
+        models = await s.catalog.openai_list()
+        model_error = None
+    except ModelCatalogError as exc:
+        models = {"object": "list", "data": []}
+        model_error = str(exc)
+    gateways = []
+    for acct in s.router.accounts():
+        gateways.append({
+            "id": acct.id,
+            "provider": getattr(acct, "provider", "codex"),
+            "plan": acct.plan,
+            "active": not await s.quota.is_cooling_down(acct.id),
+            "used_today": await s.quota.used_today(acct.id),
+        })
+    return JSONResponse({
+        "status": status.model_dump(),
+        "models": models["data"],
+        "model_error": model_error,
+        "gateways": gateways,
+    })
 
 
 # --------------------------------------------------------------------------- #
@@ -249,6 +367,9 @@ async def chat_completions(request: Request, payload: ChatCompletionRequest) -> 
     chat_id = new_chat_id()
 
     log.info("chat/completions model=%s stream=%s", model, stream)
+
+    if is_opencode_go_model(model):
+        return await _serve_opencode_go_chat(request, s, chat, model, stream)
 
     if stream:
         acct, upstream, err = await _open(s.proxy, responses_body)
@@ -288,6 +409,13 @@ async def chat_completions(request: Request, payload: ChatCompletionRequest) -> 
 async def responses(request: Request, payload: ResponsesRequest) -> Response:
     s = request.app.state
     rbody = payload.model_dump(exclude_unset=True)
+    if is_opencode_go_model(rbody.get("model")):
+        return _error(
+            400,
+            "OpenCode Go models support /v1/chat/completions through this gateway",
+            "unsupported_endpoint",
+            "invalid_request_error",
+        )
 
     client_stream = bool(rbody.get("stream"))
     rbody["stream"] = True          # the Codex backend always streams
@@ -313,6 +441,77 @@ async def responses(request: Request, payload: ResponsesRequest) -> Response:
                                  headers={"X-Gateway-Account": acct.id})
 
     return await _serve_nonstream(request, s, rbody, lambda final: json.dumps(final).encode())
+
+
+async def _serve_opencode_go_chat(
+    request: Request, s, chat: dict, model: str, stream: bool
+) -> Response:
+    body = dict(chat)
+    body["model"] = model
+    body["stream"] = stream
+
+    if stream:
+        try:
+            acct, upstream = await s.opencode_go_proxy.open_chat(body)
+        except NoAccountAvailable as exc:
+            return _error(503, str(exc), "no_account_available")
+        except AllAccountsFailed as exc:
+            return _error(exc.status_code, exc.detail, "upstream_unavailable")
+        if upstream.status_code >= 400:
+            return await _passthrough_error(acct.id, upstream)
+
+        async def gen():
+            try:
+                async for chunk in upstream.aiter_bytes():
+                    yield chunk
+            finally:
+                await upstream.aclose()
+
+        return StreamingResponse(gen(), media_type="text/event-stream",
+                                 headers={"X-Gateway-Account": acct.id})
+
+    return await _serve_opencode_go_nonstream(request, s, body)
+
+
+async def _serve_opencode_go_nonstream(request: Request, s, body: dict) -> Response:
+    dedup: DedupStore = s.dedup
+    idem_key = request.headers.get("idempotency-key")
+    use_dedup = s.settings.dedup_enabled and bool(idem_key)
+
+    if use_dedup:
+        try:
+            cached = await dedup.begin(idem_key)
+        except DuplicateInFlight as exc:
+            return _error(409, str(exc), "duplicate_in_flight", "gateway_duplicate_request")
+        if cached is not None:
+            return Response(content=cached.body, status_code=cached.status_code,
+                            media_type="application/json",
+                            headers={"X-Gateway-Account": cached.account_id, "X-Gateway-Dedup": "hit"})
+
+    try:
+        acct, upstream = await s.opencode_go_proxy.open_chat(body)
+    except NoAccountAvailable as exc:
+        if use_dedup:
+            await dedup.release(idem_key)
+        return _error(503, str(exc), "no_account_available")
+    except AllAccountsFailed as exc:
+        if use_dedup:
+            await dedup.release(idem_key)
+        return _error(exc.status_code, exc.detail, "upstream_unavailable")
+
+    content = await upstream.aread()
+    status_code = upstream.status_code
+    media_type = upstream.headers.get("content-type", "application/json")
+    await upstream.aclose()
+    if status_code >= 400:
+        if use_dedup:
+            await dedup.release(idem_key)
+        return Response(content=content, status_code=status_code, media_type=media_type,
+                        headers={"X-Gateway-Account": acct.id})
+    if use_dedup:
+        await dedup.complete(idem_key, status_code, content, acct.id)
+    return Response(content=content, status_code=status_code, media_type=media_type,
+                    headers={"X-Gateway-Account": acct.id})
 
 
 # --------------------------------------------------------------------------- #

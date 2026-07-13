@@ -25,6 +25,10 @@ class Settings:
 
     # Upstream ChatGPT Codex backend (Responses API lives at {base}/responses).
     codex_base_url: str = "https://chatgpt.com/backend-api/codex"
+    # OpenCode Go subscription endpoint. The gateway uses OpenAI-compatible
+    # chat completions for models addressed as opencode-go/<model-id>.
+    opencode_go_base_url: str = "https://opencode.ai/zen/go/v1"
+    opencode_go_api_keys: str = ""
     # Where access tokens are refreshed.
     oauth_token_url: str = "https://auth.openai.com/oauth/token"
     oauth_client_id: str = DEFAULT_CODEX_CLIENT_ID
@@ -69,6 +73,10 @@ def get_settings() -> Settings:
         codex_base_url=config(
             "CODEX_BASE_URL", default="https://chatgpt.com/backend-api/codex"
         ).rstrip("/"),
+        opencode_go_base_url=config(
+            "OPENCODE_GO_BASE_URL", default="https://opencode.ai/zen/go/v1"
+        ).rstrip("/"),
+        opencode_go_api_keys=config("OPENCODE_GO_API_KEYS", default=""),
         oauth_token_url=config(
             "OAUTH_TOKEN_URL", default="https://auth.openai.com/oauth/token"
         ),

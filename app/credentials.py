@@ -32,6 +32,8 @@ class CredentialError(Exception):
 
 
 class CodexAccount:
+    provider = "codex"
+
     def __init__(self, path: Path, data: dict, settings: Settings):
         self.path = path
         self.id = path.stem
@@ -141,7 +143,48 @@ class CodexAccount:
             tmp.unlink(missing_ok=True)
 
 
+class OpenCodeGoAccount:
+    """OpenCode Go subscription account backed by a bearer API key."""
+
+    provider = "opencode-go"
+    daily_limit: Optional[int] = None
+
+    def __init__(self, path: Optional[Path], data: dict, settings: Settings, acct_id: str = ""):
+        self.path = path
+        self.id = acct_id or (path.stem if path else "opencode-go")
+        self._settings = settings
+        self._data = data
+        api_key = str(data.get("api_key") or data.get("OPENCODE_GO_API_KEY") or "").strip()
+        if not valid_api_key(api_key):
+            label = path.name if path else self.id
+            raise CredentialError(f"{label}: missing or invalid api_key")
+        self._api_key = api_key
+
+    @property
+    def access_token(self) -> str:
+        return self._api_key
+
+    @property
+    def account_id(self) -> Optional[str]:
+        return None
+
+    @property
+    def plan(self) -> str:
+        return "opencode-go"
+
+    def masked_token(self) -> str:
+        tok = self.access_token
+        return f"{tok[:6]}…{tok[-4:]}" if len(tok) > 12 else "****"
+
+    def expires_at(self) -> Optional[int]:
+        return None
+
+    async def ensure_fresh(self, client: httpx.AsyncClient, force: bool = False) -> None:
+        return None
+
+
 _ACCOUNT_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+_CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
 
 
 def valid_account_id(account_id: str) -> bool:
@@ -149,17 +192,47 @@ def valid_account_id(account_id: str) -> bool:
     return bool(_ACCOUNT_ID_RE.match(account_id)) and account_id not in (".", "..")
 
 
-def load_accounts(settings: Settings) -> list[CodexAccount]:
+def valid_api_key(api_key: str) -> bool:
+    """Reject empty, whitespace/control-heavy keys before they reach headers."""
+    return 8 <= len(api_key) <= 4096 and not _CONTROL_RE.search(api_key) and not any(
+        c.isspace() for c in api_key
+    )
+
+
+def _is_opencode_go(data: dict) -> bool:
+    provider = str(data.get("provider") or data.get("type") or "").lower().replace("_", "-")
+    return provider == "opencode-go" or "api_key" in data or "OPENCODE_GO_API_KEY" in data
+
+
+def _account_from_data(path: Path, data: dict, settings: Settings):
+    if _is_opencode_go(data):
+        return OpenCodeGoAccount(path, data, settings)
+    return CodexAccount(path, data, settings)
+
+
+def _env_opencode_go_accounts(settings: Settings) -> list[OpenCodeGoAccount]:
+    accounts: list[OpenCodeGoAccount] = []
+    for idx, api_key in enumerate(filter(None, (k.strip() for k in settings.opencode_go_api_keys.split(","))), 1):
+        acct_id = f"opencode-go-env-{idx}"
+        try:
+            accounts.append(OpenCodeGoAccount(None, {"api_key": api_key}, settings, acct_id=acct_id))
+        except CredentialError as exc:
+            log.error("skipping %s: %s", acct_id, exc)
+    return accounts
+
+
+def load_accounts(settings: Settings) -> list:
     auth_dir = Path(settings.auth_dir)
     auth_dir.mkdir(parents=True, exist_ok=True)
 
-    accounts: list[CodexAccount] = []
+    accounts = []
     for path in sorted(auth_dir.glob("*.json")):
         try:
             data = json.loads(path.read_text())
-            accounts.append(CodexAccount(path, data, settings))
+            accounts.append(_account_from_data(path, data, settings))
         except (json.JSONDecodeError, CredentialError) as exc:
             log.error("skipping %s: %s", path.name, exc)
+    accounts.extend(_env_opencode_go_accounts(settings))
 
     if not accounts:
         # Allowed: the gateway can boot empty and have accounts uploaded via the
@@ -168,15 +241,15 @@ def load_accounts(settings: Settings) -> list[CodexAccount]:
     return accounts
 
 
-def save_account_file(settings: Settings, account_id: str, data: dict) -> CodexAccount:
-    """Validate and atomically write a Codex auth.json, returning the account."""
+def save_account_file(settings: Settings, account_id: str, data: dict):
+    """Validate and atomically write a credential JSON, returning the account."""
     if not valid_account_id(account_id):
         raise CredentialError(f"invalid account id '{account_id}'")
     auth_dir = Path(settings.auth_dir)
     auth_dir.mkdir(parents=True, exist_ok=True)
     path = auth_dir / f"{account_id}.json"
     # Constructing validates the token shape (raises CredentialError if bad).
-    account = CodexAccount(path, data, settings)
+    account = _account_from_data(path, data, settings)
     tmp = path.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(data, indent=2))
     os.chmod(tmp, 0o600)

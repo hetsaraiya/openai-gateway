@@ -42,10 +42,18 @@ class AccountRouter:
             return False
         return True
 
-    async def candidates(self) -> list:
+    async def candidates(self, provider: Optional[str] = None) -> list:
         """Ordered list of accounts to try for one request (best first)."""
-        available = [a for a in self._accounts if await self._is_available(a)]
+        accounts = [
+            a for a in self._accounts
+            if provider is None or getattr(a, "provider", "codex") == provider
+        ]
+        available = [a for a in accounts if await self._is_available(a)]
         if not available:
+            if provider:
+                raise NoAccountAvailable(
+                    f"all {provider} accounts are rate-limited or over their daily quota"
+                )
             raise NoAccountAvailable(
                 "all accounts are rate-limited or over their daily quota"
             )
