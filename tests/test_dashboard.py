@@ -2,7 +2,7 @@ import httpx
 import pytest
 
 from app.credentials import OpenCodeGoAccount
-from app.main import app
+from app.main import _dashboard_html, app
 from app.router import AccountRouter
 from tests.conftest import make_account, make_settings
 
@@ -17,6 +17,14 @@ class Catalog:
                 {"id": "opencode-go/minimax-m3", "object": "model", "gateway": "opencode-go"},
             ],
         }
+
+
+def test_dashboard_html_uses_an_origin_relative_data_path():
+    html = _dashboard_html()
+
+    assert 'const dashboardDataPath = "/dashboard/data";' in html
+    assert "fetch(dashboardDataPath" in html
+    assert "localhost" not in html
 
 
 @pytest.mark.asyncio

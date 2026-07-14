@@ -185,6 +185,8 @@ def _dashboard_html() -> str:
     const providers = document.querySelector("#providers");
     const models = document.querySelector("#models");
     const message = document.querySelector("#message");
+    // Keep this origin-relative so the dashboard works on any deployed host.
+    const dashboardDataPath = "/dashboard/data";
     keyInput.value = sessionStorage.getItem("gatewayKey") || "";
     function cell(value) {
       return String(value ?? "").replace(/[&<>"']/g, ch => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[ch]));
@@ -198,7 +200,7 @@ def _dashboard_html() -> str:
       if (!key) { message.textContent = "Enter the gateway API key to load live data."; return; }
       sessionStorage.setItem("gatewayKey", key);
       message.textContent = "Loading...";
-      const res = await fetch("/dashboard/data", { headers: { "X-Gateway-Key": key } });
+      const res = await fetch(dashboardDataPath, { headers: { "X-Gateway-Key": key } });
       if (!res.ok) { message.textContent = `Could not load dashboard data (${res.status}).`; return; }
       const data = await res.json();
       const gatewayRows = Array.isArray(data.gateways) ? data.gateways : [];
