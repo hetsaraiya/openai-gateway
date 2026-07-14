@@ -16,7 +16,7 @@ import json
 import logging
 import time
 from contextlib import asynccontextmanager
-from typing import Callable
+from typing import Any, Callable
 from uuid import uuid4
 
 import httpx
@@ -44,7 +44,17 @@ from .models import (
     StatusResponse,
 )
 from .observability import configure_logging, log_access, new_request_id, request_id_var
-from .proxy import AllAccountsFailed, CodexProxy, OpenCodeGoProxy, is_opencode_go_model
+from .proxy import (
+    AllAccountsFailed,
+    CODEX_SUPPORTED_ENDPOINTS,
+    CodexProxy,
+    OPENCODE_GO_CHAT_ENDPOINT,
+    OPENCODE_GO_MESSAGES_ENDPOINT,
+    OPENCODE_GO_MESSAGES_MODELS,
+    OpenCodeGoProxy,
+    is_opencode_go_model,
+    strip_opencode_go_model,
+)
 from .quota import QuotaStore
 from .router import AccountRouter, NoAccountAvailable
 from .translate import (
@@ -165,14 +175,14 @@ def _dashboard_html() -> str:
   <header><div class="wrap top"><h1>Gateway Dashboard</h1><form class="auth" id="auth"><input id="key" type="password" autocomplete="current-password" placeholder="Gateway API key"><button type="submit">Refresh</button></form></div></header>
   <main class="wrap">
     <section class="wide"><div class="stats" id="stats"></div><p class="muted" id="message"></p></section>
-    <section><h2>Active Gateways</h2><table><thead><tr><th>ID</th><th>Provider</th><th>Plan</th><th>Status</th></tr></thead><tbody id="gateways"></tbody></table></section>
-    <section><h2>Available Models</h2><table><thead><tr><th>Model</th><th>Gateway</th><th>Context</th></tr></thead><tbody id="models"></tbody></table></section>
+    <section><h2>Providers</h2><table><thead><tr><th>Provider</th><th>Accounts</th><th>Active</th><th>Supported endpoints</th></tr></thead><tbody id="providers"></tbody></table></section>
+    <section><h2>Available Models</h2><table><thead><tr><th>Model</th><th>Provider</th><th>Context</th><th>Supported endpoints</th></tr></thead><tbody id="models"></tbody></table></section>
   </main>
   <script>
     const keyInput = document.querySelector("#key");
     const form = document.querySelector("#auth");
     const stats = document.querySelector("#stats");
-    const gateways = document.querySelector("#gateways");
+    const providers = document.querySelector("#providers");
     const models = document.querySelector("#models");
     const message = document.querySelector("#message");
     keyInput.value = sessionStorage.getItem("gatewayKey") || "";
@@ -191,10 +201,13 @@ def _dashboard_html() -> str:
       const res = await fetch("/dashboard/data", { headers: { "X-Gateway-Key": key } });
       if (!res.ok) { message.textContent = `Could not load dashboard data (${res.status}).`; return; }
       const data = await res.json();
-      const active = data.gateways.filter(g => g.active).length;
-      stats.innerHTML = stat("Accounts", data.gateways.length) + stat("Active", active) + stat("Models", data.models.length) + stat("Strategy", data.status.strategy);
-      gateways.innerHTML = data.gateways.map(g => `<tr><td>${cell(g.id)}</td><td>${cell(g.provider)}</td><td>${cell(g.plan)}</td><td><span class="pill"><span class="dot ${g.active ? "ok" : ""}"></span>${g.active ? "active" : "cooldown"}</span></td></tr>`).join("") || `<tr><td colspan="4" class="muted">No gateways configured</td></tr>`;
-      models.innerHTML = data.models.map(m => `<tr><td>${cell(m.id)}</td><td>${cell(gatewayLabel(m))}</td><td>${cell(m.context_window || m.max_context_window || "")}</td></tr>`).join("") || `<tr><td colspan="3" class="muted">No models available</td></tr>`;
+      const gatewayRows = Array.isArray(data.gateways) ? data.gateways : [];
+      const providerRows = Array.isArray(data.providers) ? data.providers : [];
+      const modelRows = Array.isArray(data.models) ? data.models : [];
+      const active = gatewayRows.filter(g => g.active).length;
+      stats.innerHTML = stat("Accounts", gatewayRows.length) + stat("Active", active) + stat("Models", modelRows.length) + stat("Strategy", data.status?.strategy || "");
+      providers.innerHTML = providerRows.map(p => `<tr><td>${cell(p.id)}</td><td>${cell(p.accounts)}</td><td>${cell(p.active_accounts)}</td><td>${cell((p.supported_endpoints || []).join(", "))}</td></tr>`).join("") || `<tr><td colspan="4" class="muted">No providers configured</td></tr>`;
+      models.innerHTML = modelRows.map(m => `<tr><td>${cell(m.id)}</td><td>${cell(gatewayLabel(m))}</td><td>${cell(m.context_window || m.max_context_window || "")}</td><td>${cell((m.supported_endpoints || []).join(", "))}</td></tr>`).join("") || `<tr><td colspan="4" class="muted">No models available</td></tr>`;
       message.className = data.model_error ? "error" : "muted";
       message.textContent = data.model_error || `Last updated ${new Date().toLocaleTimeString()}`;
     }
@@ -352,13 +365,17 @@ async def dashboard() -> HTMLResponse:
 @app.get("/dashboard/data", dependencies=[Depends(require_master_key)])
 async def dashboard_data(request: Request) -> Response:
     s = request.app.state
-    status = await admin_status(request)
     try:
-        models = await s.catalog.openai_list()
+        catalog = await s.catalog.openai_list()
         model_error = None
     except ModelCatalogError as exc:
-        models = {"object": "list", "data": []}
+        catalog = {"object": "list", "data": []}
         model_error = str(exc)
+
+    # Normalize the catalog at this boundary so the browser always receives
+    # arrays and JSON primitives, even if a catalog implementation is swapped.
+    raw_models = catalog.get("data", []) if isinstance(catalog, dict) else []
+    models = [_dashboard_model(model) for model in raw_models if isinstance(model, dict)]
     gateways = []
     for acct in s.router.accounts():
         gateways.append({
@@ -368,12 +385,59 @@ async def dashboard_data(request: Request) -> Response:
             "active": not await s.quota.is_cooling_down(acct.id),
             "used_today": await s.quota.used_today(acct.id),
         })
+    providers = _dashboard_providers(gateways, models)
     return JSONResponse({
-        "status": status.model_dump(),
-        "models": models["data"],
+        "status": {"strategy": s.settings.strategy, "accounts": gateways},
+        "models": models,
         "model_error": model_error,
         "gateways": gateways,
+        "providers": providers,
     })
+
+
+def _dashboard_model(model: dict[str, Any]) -> dict[str, Any]:
+    """Return a JSON-safe model row with endpoint capability information."""
+    row = dict(model)
+    model_id = str(row.get("id") or "")
+    provider = row.get("gateway") or ("opencode-go" if is_opencode_go_model(model_id) else "codex")
+    row["gateway"] = provider
+    endpoints = row.get("supported_endpoints")
+    if not isinstance(endpoints, list) or not all(isinstance(item, str) for item in endpoints):
+        if provider == "opencode-go":
+            upstream_id = strip_opencode_go_model(model_id) if is_opencode_go_model(model_id) else model_id
+            endpoints = [OPENCODE_GO_MESSAGES_ENDPOINT if upstream_id in OPENCODE_GO_MESSAGES_MODELS else OPENCODE_GO_CHAT_ENDPOINT]
+        else:
+            endpoints = list(CODEX_SUPPORTED_ENDPOINTS)
+    row["supported_endpoints"] = endpoints
+    return row
+
+
+def _dashboard_providers(gateways: list[dict[str, Any]], models: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Aggregate account state and model capabilities into stable provider rows."""
+    grouped: dict[str, dict[str, Any]] = {}
+    for gateway in gateways:
+        provider = str(gateway["provider"])
+        row = grouped.setdefault(provider, {
+            "id": provider, "accounts": 0, "active_accounts": 0, "supported_endpoints": set(),
+        })
+        row["accounts"] += 1
+        row["active_accounts"] += int(bool(gateway["active"]))
+        if provider == "codex":
+            row["supported_endpoints"].update(CODEX_SUPPORTED_ENDPOINTS)
+        elif provider == "opencode-go":
+            # Go's documented API is split by model family; individual model
+            # rows below identify the exact endpoint to call.
+            row["supported_endpoints"].update((OPENCODE_GO_CHAT_ENDPOINT, OPENCODE_GO_MESSAGES_ENDPOINT))
+    for model in models:
+        provider = str(model["gateway"])
+        row = grouped.setdefault(provider, {
+            "id": provider, "accounts": 0, "active_accounts": 0, "supported_endpoints": set(),
+        })
+        row["supported_endpoints"].update(model["supported_endpoints"])
+    return [
+        {**row, "supported_endpoints": sorted(row["supported_endpoints"])}
+        for _, row in sorted(grouped.items())
+    ]
 
 
 # --------------------------------------------------------------------------- #
@@ -439,6 +503,37 @@ async def chat_completions(request: Request, payload: ChatCompletionRequest) -> 
 # --------------------------------------------------------------------------- #
 # Responses API  (passthrough)
 # --------------------------------------------------------------------------- #
+
+@app.post("/v1/messages", dependencies=[Depends(require_master_key)])
+async def messages(request: Request) -> Response:
+    """Proxy OpenCode Go's Anthropic-compatible Messages endpoint.
+
+    OpenCode Go documents this surface only for a subset of its models. Models
+    retain the ``opencode-go/`` prefix at the gateway boundary so they cannot
+    be accidentally sent to a Codex account.
+    """
+    try:
+        body = json.loads(await request.body())
+    except (json.JSONDecodeError, ValueError):
+        return _error(400, "body must be a JSON object", "invalid_json", "invalid_request_error")
+    if not isinstance(body, dict):
+        return _error(400, "body must be a JSON object", "invalid_request", "invalid_request_error")
+    model = body.get("model")
+    if not is_opencode_go_model(model):
+        return _error(
+            400,
+            "only OpenCode Go models are supported by /v1/messages",
+            "unsupported_endpoint",
+            "invalid_request_error",
+        )
+    if strip_opencode_go_model(model) not in OPENCODE_GO_MESSAGES_MODELS:
+        return _error(
+            400,
+            f"{model} does not support /v1/messages; use /v1/chat/completions",
+            "unsupported_endpoint",
+            "invalid_request_error",
+        )
+    return await _serve_opencode_go_messages(request.app.state, body)
 
 @app.post("/v1/responses", dependencies=[Depends(require_master_key)])
 async def responses(request: Request, payload: ResponsesRequest) -> Response:
@@ -506,6 +601,34 @@ async def _serve_opencode_go_chat(
                                  headers={"X-Gateway-Account": acct.id})
 
     return await _serve_opencode_go_nonstream(request, s, body)
+
+
+async def _serve_opencode_go_messages(s, body: dict) -> Response:
+    try:
+        acct, upstream = await s.opencode_go_proxy.open_messages(body)
+    except NoAccountAvailable as exc:
+        return _error(503, str(exc), "no_account_available")
+    except AllAccountsFailed as exc:
+        return _error(exc.status_code, exc.detail, "upstream_unavailable")
+    if upstream.status_code >= 400:
+        return await _passthrough_error(acct.id, upstream)
+
+    if body.get("stream"):
+        async def gen():
+            try:
+                async for chunk in upstream.aiter_bytes():
+                    yield chunk
+            finally:
+                await upstream.aclose()
+
+        return StreamingResponse(gen(), media_type="text/event-stream",
+                                 headers={"X-Gateway-Account": acct.id})
+
+    content = await upstream.aread()
+    media_type = upstream.headers.get("content-type", "application/json")
+    await upstream.aclose()
+    return Response(content=content, status_code=upstream.status_code, media_type=media_type,
+                    headers={"X-Gateway-Account": acct.id})
 
 
 async def _serve_opencode_go_nonstream(request: Request, s, body: dict) -> Response:

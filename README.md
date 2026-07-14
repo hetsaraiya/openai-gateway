@@ -66,7 +66,14 @@ response = client.chat.completions.create(
 print(response.choices[0].message.content)
 ```
 
-Available models are exposed at `GET /v1/models`.
+Available models are exposed at `GET /v1/models`. The authenticated dashboard at
+`GET /dashboard` shows providers, models, and the endpoint supported by each
+model.
+
+Codex models support `POST /v1/responses` and `POST /v1/chat/completions`.
+OpenCode Go models use either `POST /v1/chat/completions` or, for the models
+published with Anthropic compatibility, `POST /v1/messages`. Use the
+`opencode-go/<model-id>` model name at the gateway boundary in both cases.
 
 ## Configuration
 

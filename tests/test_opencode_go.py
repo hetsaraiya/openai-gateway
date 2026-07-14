@@ -116,6 +116,36 @@ async def test_opencode_go_proxy_strips_model_prefix_and_sends_bearer(quota):
 
 
 @pytest.mark.asyncio
+async def test_opencode_go_messages_uses_anthropic_headers(quota):
+    settings = make_settings()
+    account = OpenCodeGoAccount(None, {"api_key": "go_test_123456"}, settings, "go")
+    router = AccountRouter(settings, [account], quota)
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["url"] = str(request.url)
+        seen["api_key"] = request.headers.get("x-api-key")
+        seen["version"] = request.headers.get("anthropic-version")
+        seen["json"] = json.loads(request.content)
+        return httpx.Response(200, json={"id": "msg_go", "type": "message"})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    proxy = OpenCodeGoProxy(settings, router, client)
+    try:
+        _, response = await proxy.open_messages({
+            "model": "opencode-go/minimax-m3", "max_tokens": 10, "messages": [],
+        })
+        assert response.status_code == 200
+        assert seen["url"] == "https://go.test/v1/messages"
+        assert seen["api_key"] == "go_test_123456"
+        assert seen["version"] == "2023-06-01"
+        assert seen["json"]["model"] == "minimax-m3"
+        await response.aclose()
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
 async def test_model_catalog_includes_opencode_go_models(tmp_path, quota):
     settings = make_settings()
     codex = make_account(tmp_path, "codex", settings=settings)

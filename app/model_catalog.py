@@ -18,7 +18,15 @@ import httpx
 
 from .config import Settings
 from .credentials import CredentialError
-from .proxy import OPENCODE_GO_MODEL_PREFIX, build_codex_headers, build_opencode_go_headers
+from .proxy import (
+    CODEX_SUPPORTED_ENDPOINTS,
+    OPENCODE_GO_CHAT_ENDPOINT,
+    OPENCODE_GO_MESSAGES_ENDPOINT,
+    OPENCODE_GO_MESSAGES_MODELS,
+    OPENCODE_GO_MODEL_PREFIX,
+    build_codex_headers,
+    build_opencode_go_headers,
+)
 from .router import AccountRouter, NoAccountAvailable
 
 log = logging.getLogger("gateway.models")
@@ -114,6 +122,8 @@ class ModelCatalog:
             "max_context_window": m.get("max_context_window"),
             "supported_in_api": m.get("supported_in_api"),
             "input_modalities": m.get("input_modalities"),
+            "gateway": "codex",
+            "supported_endpoints": list(CODEX_SUPPORTED_ENDPOINTS),
         }
 
     def _visible(self) -> list[dict]:
@@ -180,6 +190,11 @@ class ModelCatalog:
     @staticmethod
     def _opencode_to_openai(m: dict) -> dict:
         model_id = m.get("id") or m.get("slug")
+        endpoint = (
+            OPENCODE_GO_MESSAGES_ENDPOINT
+            if model_id in OPENCODE_GO_MESSAGES_MODELS
+            else OPENCODE_GO_CHAT_ENDPOINT
+        )
         return {
             "id": f"{OPENCODE_GO_MODEL_PREFIX}{model_id}",
             "object": "model",
@@ -190,4 +205,5 @@ class ModelCatalog:
             "context_window": m.get("context_window"),
             "supported_in_api": True,
             "gateway": "opencode-go",
+            "supported_endpoints": [endpoint],
         }
