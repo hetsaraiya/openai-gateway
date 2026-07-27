@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0.4 1.6 23.2 20.8">
+  <!-- Tighter crop and a heavier stroke than the in-app mark, so it still reads at 16px. -->
+  <style>
+    g { stroke: #3A56D4; }
+    @media (prefers-color-scheme: dark) { g { stroke: #6F8CFB; } }
+  </style>
+  <g fill="none" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M4.45 6.4a9.4 9.4 0 0 1 15.1 0"/>
+    <path d="M4.45 17.6a9.4 9.4 0 0 0 15.1 0"/>
+    <path d="M1.7 9.2h6.5l3.4 2.8"/>
+    <path d="M1.7 14.8h6.5l3.4-2.8"/>
+    <path d="M1.7 12h18"/>
+    <path d="m18.1 8.7 3.3 3.3-3.3 3.3"/>
+  </g>
+</svg>

@@ -1,13 +1,13 @@
-import gatewayMark from "../assets/gateway-mark.png"
 import { cn } from "../lib/utils"
+import { GatewayMark } from "./gateway-mark"
 
 export function BrandMark({ className, size = 36 }: { className?: string; size?: number }) {
   return (
     <span
-      className={cn("grid shrink-0 place-items-center overflow-hidden rounded-lg border border-line bg-inset", className)}
+      className={cn("grid shrink-0 place-items-center rounded-lg border border-line bg-inset text-accent", className)}
       style={{ width: size, height: size }}
     >
-      <img src={gatewayMark} width={size} height={size} alt="" aria-hidden="true" className="size-full object-cover" />
+      <GatewayMark size={Math.round(size * 0.74)} />
     </span>
   )
 }
