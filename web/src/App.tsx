@@ -6,6 +6,7 @@ import { Callout } from "./components/ui/callout"
 import { ToastRegion } from "./components/ui/toast"
 import { ApiError, fetchDashboard, fetchLogin, type Dashboard, type Login } from "./lib/api"
 import { viewFromHash, type View } from "./lib/navigation"
+import { clearSession, loadSession, saveSession } from "./lib/session"
 import { useTheme } from "./lib/theme"
 import { useToasts } from "./lib/use-toasts"
 import { relativeTime } from "./lib/utils"
@@ -20,9 +21,10 @@ export default function App() {
   const { theme, toggle: toggleTheme } = useTheme()
   const { toasts, push, dismiss } = useToasts()
 
-  const [gatewayKey, setGatewayKey] = useState("")
-  const [authenticated, setAuthenticated] = useState(false)
+  const [gatewayKey, setGatewayKey] = useState(() => loadSession() ?? "")
+  const [authenticated, setAuthenticated] = useState(() => Boolean(loadSession()))
   const [data, setData] = useState<Dashboard | null>(null)
+  const [sessionNotice, setSessionNotice] = useState("")
   const [loadError, setLoadError] = useState("")
   const [loading, setLoading] = useState(false)
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null)
@@ -36,6 +38,19 @@ export default function App() {
   const pushRef = useRef(push)
   pushRef.current = push
 
+  // Forgets the key everywhere — memory and storage — and returns to the gate.
+  const endSession = useCallback((notice = "") => {
+    clearSession()
+    setGatewayKey("")
+    setAuthenticated(false)
+    setData(null)
+    setLogin(null)
+    setLoadError("")
+    setUpdatedAt(null)
+    setMobileOpen(false)
+    setSessionNotice(notice)
+  }, [])
+
   const loadDashboard = useCallback(async (key: string, options?: { silent?: boolean }) => {
     if (!key) return
     if (!options?.silent) setLoading(true)
@@ -43,14 +58,28 @@ export default function App() {
       setData(await fetchDashboard(key))
       setLoadError("")
       setUpdatedAt(new Date())
+      // Each authenticated round trip pushes the expiry back out.
+      saveSession(key)
     } catch (cause) {
-      const message = (cause as ApiError).message
-      setLoadError(message)
-      if (!options?.silent) pushRef.current(message, "danger")
+      const failure = cause as ApiError
+      // A stored key the gateway no longer accepts is worse than no key at all:
+      // drop it and ask again rather than leaving a console that cannot load.
+      if (failure.status === 401) {
+        endSession("Your saved gateway key is no longer accepted. Enter it again.")
+        return
+      }
+      setLoadError(failure.message)
+      if (!options?.silent) pushRef.current(failure.message, "danger")
     } finally {
       if (!options?.silent) setLoading(false)
     }
-  }, [])
+  }, [endSession])
+
+  // Restores a stored session on first paint; the load also revalidates the key.
+  useEffect(() => {
+    const stored = loadSession()
+    if (stored) void loadDashboard(stored)
+  }, [loadDashboard])
 
   useEffect(() => {
     const syncView = () => setActiveView(viewFromHash())
@@ -113,22 +142,16 @@ export default function App() {
   }
 
   async function unlock(key: string) {
+    saveSession(key)
     setGatewayKey(key)
     setAuthenticated(true)
+    setSessionNotice("")
     await loadDashboard(key)
   }
 
-  function lock() {
-    setGatewayKey("")
-    setData(null)
-    setLogin(null)
-    setAuthenticated(false)
-    setLoadError("")
-    setUpdatedAt(null)
-    setMobileOpen(false)
+  if (!authenticated) {
+    return <AccessGate theme={theme} notice={sessionNotice} onToggleTheme={toggleTheme} onVerified={unlock} />
   }
-
-  if (!authenticated) return <AccessGate theme={theme} onToggleTheme={toggleTheme} onVerified={unlock} />
 
   return (
     <div className="min-h-dvh">
@@ -137,7 +160,7 @@ export default function App() {
         onSelect={selectView}
         mobileOpen={mobileOpen}
         onCloseMobile={() => setMobileOpen(false)}
-        onLock={lock}
+        onLock={() => endSession()}
       />
 
       <div className="lg:pl-64">

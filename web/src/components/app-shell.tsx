@@ -76,7 +76,9 @@ export function Sidebar({
           <div className="rounded-lg border border-line bg-inset p-3">
             <ShieldCheck size={16} className="text-success" aria-hidden="true" />
             <p className="mt-2 text-[13px] font-medium text-ink">Credentials stay in the gateway</p>
-            <p className="mt-1 text-[12px] leading-5 text-subtle">This console keeps your key in memory for the session only.</p>
+            <p className="mt-1 text-[12px] leading-5 text-subtle">
+              Account tokens never reach this page. Your gateway key stays in this browser until you lock.
+            </p>
           </div>
           <Button variant="ghost" className="mt-2 w-full justify-start" onClick={onLock}>
             <LockKeyhole size={16} aria-hidden="true" />

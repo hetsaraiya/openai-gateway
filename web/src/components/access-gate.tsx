@@ -2,18 +2,22 @@ import { Eye, EyeOff, LoaderCircle, LockKeyhole, ShieldCheck } from "lucide-reac
 import { useState } from "react"
 
 import { ApiError, checkKey } from "../lib/api"
+import { SESSION_DAYS } from "../lib/session"
 import type { Theme } from "../lib/theme"
 import { BrandMark } from "./brand"
 import { ThemeToggle } from "./theme-toggle"
 import { Button } from "./ui/button"
+import { Callout } from "./ui/callout"
 import { Field, Input } from "./ui/input"
 
 export function AccessGate({
   theme,
+  notice,
   onToggleTheme,
   onVerified,
 }: {
   theme: Theme
+  notice?: string
   onToggleTheme: () => void
   onVerified: (key: string) => Promise<void>
 }) {
@@ -56,6 +60,12 @@ export function AccessGate({
           Enter your gateway key to open the operations console. Nothing is requested before the key is verified.
         </p>
 
+        {notice && (
+          <Callout tone="warning" className="mt-5">
+            {notice}
+          </Callout>
+        )}
+
         <form className="mt-7 space-y-4" onSubmit={verify} noValidate>
           <Field label="Gateway API key" htmlFor="gateway-key" error={error}>
             <div className="relative">
@@ -95,7 +105,8 @@ export function AccessGate({
 
         <p className="mt-6 flex items-start gap-2 border-t border-line pt-5 text-[13px] leading-5 text-subtle">
           <LockKeyhole size={14} className="mt-0.5 shrink-0" aria-hidden="true" />
-          The key is held in memory for this browser session only — never written to storage.
+          The key is kept in this browser so you stay signed in, and is cleared after {SESSION_DAYS} days of
+          inactivity or when you lock the console.
         </p>
       </section>
     </main>
