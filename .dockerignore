@@ -29,3 +29,5 @@ Dockerfile
 .DS_Store
 web/node_modules/
 web/dist/
+# A local build of the console; the image builds its own into app/static.
+app/static/

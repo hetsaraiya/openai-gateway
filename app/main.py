@@ -23,6 +23,7 @@ from uuid import uuid4
 import httpx
 from fastapi import Depends, FastAPI, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 
 from . import __version__
 from .auth import require_master_key
@@ -397,6 +398,12 @@ async def dashboard() -> Response:
     if index.is_file():
         return FileResponse(index)
     return HTMLResponse(_dashboard_html())
+
+
+# The built console loads its bundle from /assets/*. Without this mount the page
+# renders an empty root element. Absent in dev, where the fallback HTML is used.
+if (WEB_DIR / "assets").is_dir():
+    app.mount("/assets", StaticFiles(directory=WEB_DIR / "assets"), name="assets")
 
 
 @app.post("/dashboard/auth/check", status_code=204, dependencies=[Depends(require_master_key)])

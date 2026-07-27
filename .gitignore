@@ -44,3 +44,6 @@ Thumbs.db
 # ---- AI ---------------------------------------------------------------------
 .codex/
 .claude/
+
+# Built console copied from web/dist (produced by the Docker web stage).
+app/static/

@@ -1,25 +1,180 @@
 @import "tailwindcss";
 
-/* Tailwind design tokens: midnight aubergine, lilac, and champagne. */
-@theme {
-  --color-slate-50: #fffbff;
-  --color-slate-100: #f8f1f9;
-  --color-slate-200: #eadfed;
-  --color-slate-300: #d6c7dc;
-  --color-slate-400: #bbaac2;
-  --color-slate-500: #96829e;
-  --color-slate-600: #735e7b;
-  --color-slate-700: #503f58;
-  --color-slate-800: #372b3e;
-  --color-slate-900: #271e2d;
-  --color-slate-950: #17121b;
+/* The theme is driven by a `dark` class on <html> so the toggle can override
+   the OS preference. `@theme inline` maps utilities straight onto the semantic
+   variables below, so every utility follows the active theme. */
+@custom-variant dark (&:where(.dark, .dark *));
 
-  --color-emerald-200: #eee1bd;
-  --color-emerald-300: #e0c47d;
-  --color-emerald-400: #caa45e;
-  --color-emerald-500: #af873e;
+@theme inline {
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, "JetBrains Mono", Menlo, Consolas, monospace;
+
+  /* Surfaces, from furthest back to closest to the reader. */
+  --color-canvas: var(--canvas);
+  --color-surface: var(--surface);
+  --color-elevated: var(--elevated);
+  --color-inset: var(--inset);
+
+  /* Hairlines. `line-strong` is for interactive borders on hover/focus. */
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+
+  /* Text, from primary to least prominent. */
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-subtle: var(--subtle);
+
+  /* Sapphire accent. `accent` fills, `accent-text` writes on a surface. */
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-fg: var(--accent-fg);
+  --color-accent-text: var(--accent-text);
+  --color-accent-soft: var(--accent-soft);
+
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+
+  --shadow-panel: var(--shadow-panel-value);
+  --shadow-float: var(--shadow-float-value);
+
+  --animate-overlay-in: overlay-in 160ms ease-out;
+  --animate-panel-in: panel-in 180ms cubic-bezier(0.16, 1, 0.3, 1);
+  --animate-toast-in: toast-in 220ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+:root {
+  color-scheme: light;
+
+  --canvas: #f6f7f9;
+  --surface: #ffffff;
+  --elevated: #fbfcfd;
+  --inset: #f1f3f7;
+
+  --line: #e2e6ec;
+  --line-strong: #cbd2dc;
+
+  --ink: #0f141c;
+  --muted: #566072;
+  --subtle: #7a8493;
+
+  --accent: #3a56d4;
+  --accent-hover: #2f49be;
+  --accent-fg: #ffffff;
+  --accent-text: #2f49be;
+  --accent-soft: color-mix(in oklab, #3a56d4 10%, transparent);
+
+  --success: #0f8a5f;
+  --success-soft: color-mix(in oklab, #0f8a5f 12%, transparent);
+  --warning: #a96f11;
+  --warning-soft: color-mix(in oklab, #a96f11 14%, transparent);
+  --danger: #c4352f;
+  --danger-soft: color-mix(in oklab, #c4352f 10%, transparent);
+
+  --shadow-panel-value: 0 1px 2px rgb(15 20 28 / 0.04), 0 1px 3px rgb(15 20 28 / 0.06);
+  --shadow-float-value: 0 12px 32px -8px rgb(15 20 28 / 0.18), 0 4px 12px -4px rgb(15 20 28 / 0.1);
+}
+
+.dark {
+  color-scheme: dark;
+
+  --canvas: #0a0c10;
+  --surface: #12161d;
+  --elevated: #171c25;
+  --inset: #0d1015;
+
+  --line: #232a35;
+  --line-strong: #333c4a;
+
+  --ink: #e7eaf0;
+  --muted: #96a0b0;
+  --subtle: #6c7686;
+
+  --accent: #4f6bf0;
+  --accent-hover: #5d78f3;
+  --accent-fg: #f7f9ff;
+  --accent-text: #8aa1fc;
+  --accent-soft: color-mix(in oklab, #8aa1fc 14%, transparent);
+
+  --success: #3dbe8b;
+  --success-soft: color-mix(in oklab, #3dbe8b 14%, transparent);
+  --warning: #e0a64a;
+  --warning-soft: color-mix(in oklab, #e0a64a 14%, transparent);
+  --danger: #f0827c;
+  --danger-soft: color-mix(in oklab, #f0827c 14%, transparent);
+
+  --shadow-panel-value: 0 1px 2px rgb(0 0 0 / 0.3), 0 1px 3px rgb(0 0 0 / 0.2);
+  --shadow-float-value: 0 16px 40px -12px rgb(0 0 0 / 0.6), 0 4px 12px -4px rgb(0 0 0 / 0.4);
 }
 
 @layer base {
-  :root { color-scheme: dark; }
+  * {
+    border-color: var(--line);
+  }
+
+  html {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  body {
+    background-color: var(--canvas);
+    color: var(--ink);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  ::selection {
+    background-color: color-mix(in oklab, var(--accent) 28%, transparent);
+  }
+
+  /* Slim scrollbars so long catalogs don't get a heavy grey slab. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--line-strong) transparent;
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background-color: var(--line-strong);
+    border: 3px solid transparent;
+    border-radius: 999px;
+    background-clip: content-box;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: var(--subtle);
+  }
+}
+
+@keyframes overlay-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes panel-in {
+  from { opacity: 0; transform: translate(-50%, -48%) scale(0.97); }
+  to { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+}
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(8px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
