@@ -16,6 +16,31 @@ COPY pyproject.toml uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --no-install-project
 
+# ---- web + Codex CLI -------------------------------------------------------- #
+FROM node:22-bookworm-slim AS web-builder
+
+ARG TARGETARCH
+ARG CODEX_VERSION=0.145.0
+
+WORKDIR /web
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends ca-certificates curl \
+    && case "$TARGETARCH" in \
+        amd64) codex_target=x86_64-unknown-linux-musl ;; \
+        arm64) codex_target=aarch64-unknown-linux-musl ;; \
+        *) echo "Unsupported Codex architecture: $TARGETARCH" >&2; exit 1 ;; \
+       esac \
+    && curl --fail --location --silent --show-error \
+        "https://github.com/openai/codex/releases/download/rust-v${CODEX_VERSION}/codex-${codex_target}.tar.gz" \
+        | tar --extract --gzip --file - --directory /tmp \
+    && install --mode=755 "/tmp/codex-${codex_target}" /usr/local/bin/codex \
+    && rm -rf /var/lib/apt/lists/*
+RUN corepack enable
+COPY web/package.json web/pnpm-lock.yaml ./
+RUN pnpm install --frozen-lockfile
+COPY web ./
+RUN pnpm build
+
 
 # ---- runtime: minimal image, no uv, non-root ------------------------------- #
 FROM python:3.12-slim-bookworm AS runtime
@@ -33,6 +58,8 @@ RUN groupadd --gid 10001 gateway \
 # Copy the prebuilt venv and the application code.
 COPY --from=builder --chown=gateway:gateway /app/.venv /app/.venv
 COPY --chown=gateway:gateway app ./app
+COPY --from=web-builder /usr/local/bin/codex /usr/local/bin/codex
+COPY --from=web-builder --chown=gateway:gateway /web/dist ./app/static
 
 # Writable, restricted mount point for the Codex auth.json files. Tokens are
 # refreshed and written back here, so it must be read-write at runtime — mount a

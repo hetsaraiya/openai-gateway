@@ -16,12 +16,13 @@ import json
 import logging
 import time
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any, Callable
 from uuid import uuid4
 
 import httpx
 from fastapi import Depends, FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 
 from . import __version__
 from .auth import require_master_key
@@ -34,6 +35,7 @@ from .credentials import (
     valid_account_id,
 )
 from .dedup import DedupStore, DuplicateInFlight
+from .device_login import DeviceLoginManager
 from .model_catalog import ModelCatalog, ModelCatalogError
 from .models import (
     AccountStatus,
@@ -68,6 +70,7 @@ from .translate import (
 )
 
 log = logging.getLogger("gateway")
+WEB_DIR = Path(__file__).parent / "static"
 
 
 @asynccontextmanager
@@ -83,6 +86,7 @@ async def lifespan(app: FastAPI):
     proxy = CodexProxy(settings, router, client)
     opencode_go_proxy = OpenCodeGoProxy(settings, router, client)
     catalog = ModelCatalog(settings, router, client)
+    device_logins = DeviceLoginManager(settings, router)
 
     app.state.settings = settings
     app.state.router = router
@@ -91,6 +95,7 @@ async def lifespan(app: FastAPI):
     app.state.proxy = proxy
     app.state.opencode_go_proxy = opencode_go_proxy
     app.state.catalog = catalog
+    app.state.device_logins = device_logins
     app.state.client = client
 
     redis_ok = await quota.ping()
@@ -101,6 +106,7 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        await device_logins.close()
         await client.aclose()
         await quota.close()
         await dedup.close()
@@ -317,6 +323,32 @@ async def delete_account(account_id: str, request: Request) -> Response:
     return JSONResponse({"status": "ok", "account": account_id, "deleted": True})
 
 
+@app.post("/admin/accounts/{account_id}/login/device", dependencies=[Depends(require_master_key)])
+async def start_device_login(account_id: str, request: Request) -> Response:
+    if not valid_account_id(account_id):
+        return _error(400, "invalid account id", "invalid_account_id", "invalid_request_error")
+    try:
+        login = await request.app.state.device_logins.start(account_id)
+    except FileNotFoundError:
+        return _error(503, "Codex login support is not installed", "codex_unavailable")
+    if login.status == "failed":
+        return _error(502, login.error or "could not start device login", "login_start_failed")
+    return JSONResponse(status_code=201, content={
+        "id": login.id, "account_id": account_id, "status": login.status,
+        "verification_url": login.verification_url, "user_code": login.user_code,
+    })
+
+
+@app.get("/admin/logins/{login_id}", dependencies=[Depends(require_master_key)])
+async def device_login_status(login_id: str, request: Request) -> Response:
+    login = request.app.state.device_logins.get(login_id)
+    if not login:
+        return _error(404, "login not found", "login_not_found")
+    return JSONResponse({"id": login.id, "account_id": login.account_id, "status": login.status,
+                         "verification_url": login.verification_url, "user_code": login.user_code,
+                         "error": login.error})
+
+
 @app.post("/v1/admin/opencode-go/keys", dependencies=[Depends(require_master_key)])
 async def add_opencode_go_key(payload: OpenCodeGoKeyCreate, request: Request) -> Response:
     """Persist and hot-load an OpenCode Go subscription API key.
@@ -360,8 +392,17 @@ async def list_models(request: Request) -> Response:
 
 
 @app.get("/dashboard", response_class=HTMLResponse)
-async def dashboard() -> HTMLResponse:
+async def dashboard() -> Response:
+    index = WEB_DIR / "index.html"
+    if index.is_file():
+        return FileResponse(index)
     return HTMLResponse(_dashboard_html())
+
+
+@app.post("/dashboard/auth/check", status_code=204, dependencies=[Depends(require_master_key)])
+async def dashboard_auth_check() -> Response:
+    """Validate the dashboard token without loading account or model data."""
+    return Response(status_code=204)
 
 
 @app.get("/dashboard/data", dependencies=[Depends(require_master_key)])

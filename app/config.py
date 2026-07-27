@@ -32,6 +32,7 @@ class Settings:
     # Where access tokens are refreshed.
     oauth_token_url: str = "https://auth.openai.com/oauth/token"
     oauth_client_id: str = DEFAULT_CODEX_CLIENT_ID
+    codex_binary: str = "codex"
     # Refresh the access token this many seconds before it actually expires.
     token_refresh_skew: int = 300
 
@@ -81,6 +82,7 @@ def get_settings() -> Settings:
             "OAUTH_TOKEN_URL", default="https://auth.openai.com/oauth/token"
         ),
         oauth_client_id=config("CODEX_CLIENT_ID", default=DEFAULT_CODEX_CLIENT_ID),
+        codex_binary=config("CODEX_BINARY", default="codex"),
         token_refresh_skew=config("TOKEN_REFRESH_SKEW", default=300, cast=int),
         originator=config("CODEX_ORIGINATOR", default="codex_cli_rs"),
         openai_beta=config("CODEX_OPENAI_BETA", default="responses=experimental"),

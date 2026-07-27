@@ -10,12 +10,14 @@ account with an ``asyncio.Lock`` so concurrent requests don't stampede.
 from __future__ import annotations
 
 import asyncio
+import copy
 import datetime as dt
 import json
 import logging
 import os
 import re
 import time
+import uuid
 from pathlib import Path
 from typing import Optional
 
@@ -119,28 +121,38 @@ class CodexAccount:
             raise CredentialError(
                 f"token refresh failed for {self.id}: HTTP {resp.status_code} {resp.text[:200]}"
             )
-        payload = resp.json()
-        tokens = self._tokens
-        tokens["access_token"] = payload["access_token"]
+        try:
+            payload = resp.json()
+        except json.JSONDecodeError as exc:
+            raise CredentialError(f"token refresh returned invalid JSON for {self.id}") from exc
+        access_token = payload.get("access_token") if isinstance(payload, dict) else None
+        if not isinstance(access_token, str) or not access_token:
+            raise CredentialError(f"token refresh returned no access token for {self.id}")
+
+        # Refresh-token rotation invalidates the old refresh token. Persist the
+        # complete replacement before exposing it in memory: otherwise a failed
+        # disk write works only until the next restart, then leaves the account
+        # permanently unable to refresh.
+        updated = copy.deepcopy(self._data)
+        tokens = updated.setdefault("tokens", {})
+        tokens["access_token"] = access_token
         if payload.get("refresh_token"):
             tokens["refresh_token"] = payload["refresh_token"]
         if payload.get("id_token"):
             tokens["id_token"] = payload["id_token"]
-        self._data["last_refresh"] = dt.datetime.now(dt.timezone.utc).strftime(
-            "%Y-%m-%dT%H:%M:%S.000Z"
-        )
-        self._persist()
+        updated["last_refresh"] = dt.datetime.now(dt.timezone.utc).isoformat(
+            timespec="milliseconds"
+        ).replace("+00:00", "Z")
+        self._persist(updated)
+        self._data = updated
         log.info("account %s token refreshed (new exp=%s)", self.id, self.expires_at())
 
-    def _persist(self) -> None:
+    def _persist(self, data: dict) -> None:
         """Atomically write the updated auth.json back to disk."""
-        tmp = self.path.with_suffix(".json.tmp")
         try:
-            tmp.write_text(json.dumps(self._data, indent=2))
-            os.replace(tmp, self.path)
-        except Exception as exc:  # noqa: BLE001
-            log.warning("could not persist refreshed tokens for %s: %s", self.id, exc)
-            tmp.unlink(missing_ok=True)
+            _write_auth_json(self.path, data)
+        except OSError as exc:
+            raise CredentialError(f"could not persist refreshed tokens for {self.id}: {exc}") from exc
 
 
 class OpenCodeGoAccount:
@@ -241,6 +253,24 @@ def load_accounts(settings: Settings) -> list:
     return accounts
 
 
+def _write_auth_json(path: Path, data: dict) -> None:
+    """Durably replace an auth file without ever relaxing its permissions."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(data, handle, indent=2)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, path)
+        os.chmod(path, 0o600)
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        raise
+
+
 def save_account_file(settings: Settings, account_id: str, data: dict):
     """Validate and atomically write a credential JSON, returning the account."""
     if not valid_account_id(account_id):
@@ -250,10 +280,7 @@ def save_account_file(settings: Settings, account_id: str, data: dict):
     path = auth_dir / f"{account_id}.json"
     # Constructing validates the token shape (raises CredentialError if bad).
     account = _account_from_data(path, data, settings)
-    tmp = path.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(data, indent=2))
-    os.chmod(tmp, 0o600)
-    os.replace(tmp, path)
+    _write_auth_json(path, data)
     return account
 
 

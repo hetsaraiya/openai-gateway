@@ -4,6 +4,10 @@ auth/
 .env
 *.env
 !.env.example
+!web/package.json
+!web/tsconfig.json
+!web/tsconfig.app.json
+!web/tsconfig.node.json
 
 # --- python / project cruft ---
 .venv/
@@ -23,3 +27,5 @@ docker-compose.yml
 Dockerfile
 .dockerignore
 .DS_Store
+web/node_modules/
+web/dist/

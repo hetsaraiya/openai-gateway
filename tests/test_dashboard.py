@@ -64,6 +64,21 @@ async def test_dashboard_data_has_json_safe_provider_and_endpoint_rows(tmp_path,
 
 
 @pytest.mark.asyncio
+async def test_dashboard_token_check_only_accepts_a_valid_master_key(monkeypatch):
+    settings = make_settings()
+    monkeypatch.setattr("app.auth.get_settings", lambda: settings)
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        denied = await client.post("/dashboard/auth/check")
+        accepted = await client.post("/dashboard/auth/check", headers={"X-Gateway-Key": "test-master"})
+
+    assert denied.status_code == 401
+    assert accepted.status_code == 204
+    assert accepted.content == b""
+
+
+@pytest.mark.asyncio
 async def test_messages_rejects_opencode_models_without_messages_support(quota, monkeypatch):
     settings = make_settings()
     monkeypatch.setattr("app.auth.get_settings", lambda: settings)

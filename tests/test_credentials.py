@@ -1,9 +1,10 @@
 import json
 
 import httpx
+import pytest
 
 from app import jwt_util
-from app.credentials import CodexAccount, load_accounts
+from app.credentials import CodexAccount, CredentialError, load_accounts
 from tests.conftest import make_account, make_jwt, make_settings
 
 
@@ -50,6 +51,37 @@ async def test_ensure_fresh_refreshes_expired_token(tmp_path):
     assert captured["url"] == settings.oauth_token_url
     assert captured["body"]["grant_type"] == "refresh_token"
     assert captured["body"]["client_id"] == settings.oauth_client_id
+    assert oct(acct.path.stat().st_mode)[-3:] == "600"
+
+
+async def test_refresh_keeps_current_tokens_when_persistence_fails(tmp_path, monkeypatch):
+    settings = make_settings()
+    acct = make_account(tmp_path, "a", exp_offset=-10, settings=settings)
+    old_access = acct.access_token
+    old_refresh = acct.refresh_token
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={
+            "access_token": make_jwt({"exp": 9999999999}),
+            "refresh_token": "refresh-rotated",
+        })
+
+    def fail_write(path, data):
+        raise OSError("read-only auth mount")
+
+    monkeypatch.setattr("app.credentials._write_auth_json", fail_write)
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    try:
+        with pytest.raises(CredentialError, match="could not persist"):
+            await acct.ensure_fresh(client)
+    finally:
+        await client.aclose()
+
+    assert acct.access_token == old_access
+    assert acct.refresh_token == old_refresh
+    persisted = json.loads(acct.path.read_text())
+    assert persisted["tokens"]["access_token"] == old_access
+    assert persisted["tokens"]["refresh_token"] == old_refresh
 
 
 async def test_ensure_fresh_noop_when_valid(tmp_path):

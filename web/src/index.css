@@ -1,0 +1,25 @@
+@import "tailwindcss";
+
+/* Tailwind design tokens: midnight aubergine, lilac, and champagne. */
+@theme {
+  --color-slate-50: #fffbff;
+  --color-slate-100: #f8f1f9;
+  --color-slate-200: #eadfed;
+  --color-slate-300: #d6c7dc;
+  --color-slate-400: #bbaac2;
+  --color-slate-500: #96829e;
+  --color-slate-600: #735e7b;
+  --color-slate-700: #503f58;
+  --color-slate-800: #372b3e;
+  --color-slate-900: #271e2d;
+  --color-slate-950: #17121b;
+
+  --color-emerald-200: #eee1bd;
+  --color-emerald-300: #e0c47d;
+  --color-emerald-400: #caa45e;
+  --color-emerald-500: #af873e;
+}
+
+@layer base {
+  :root { color-scheme: dark; }
+}
