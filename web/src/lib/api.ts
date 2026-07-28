@@ -90,6 +90,14 @@ export function fetchLogin(loginId: string, key: string) {
   return request<Login>(`/admin/logins/${encodeURIComponent(loginId)}`, key)
 }
 
+export function deleteAccount(accountId: string, key: string) {
+  return request<{ status: "ok"; account: string; deleted: true }>(
+    `/admin/accounts/${encodeURIComponent(accountId)}`,
+    key,
+    { method: "DELETE" },
+  )
+}
+
 export function providerFor(model: Model) {
   return model.gateway ?? (model.id.startsWith("opencode-go/") ? "opencode-go" : "codex")
 }

@@ -79,6 +79,34 @@ async def test_dashboard_token_check_only_accepts_a_valid_master_key(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_delete_account_removes_router_entry_and_auth_file(tmp_path, quota, monkeypatch):
+    settings = make_settings(auth_dir=str(tmp_path))
+    account = make_account(tmp_path, "remove-me", settings=settings)
+    monkeypatch.setattr("app.auth.get_settings", lambda: settings)
+    app.state.settings = settings
+    app.state.router = AccountRouter(settings, [account], quota)
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        denied = await client.delete("/admin/accounts/remove-me")
+        deleted = await client.delete(
+            "/admin/accounts/remove-me",
+            headers={"X-Gateway-Key": "test-master"},
+        )
+        missing = await client.delete(
+            "/admin/accounts/remove-me",
+            headers={"X-Gateway-Key": "test-master"},
+        )
+
+    assert denied.status_code == 401
+    assert deleted.status_code == 200
+    assert deleted.json() == {"status": "ok", "account": "remove-me", "deleted": True}
+    assert app.state.router.accounts() == []
+    assert not (tmp_path / "remove-me.json").exists()
+    assert missing.status_code == 404
+
+
+@pytest.mark.asyncio
 async def test_messages_rejects_opencode_models_without_messages_support(quota, monkeypatch):
     settings = make_settings()
     monkeypatch.setattr("app.auth.get_settings", lambda: settings)

@@ -1,6 +1,7 @@
 import { KeyRound } from "lucide-react"
 
 import { AccountDialog } from "../components/account-dialog"
+import { DeleteAccountDialog } from "../components/delete-account-dialog"
 import { DeviceLogin } from "../components/device-login"
 import { Badge } from "../components/ui/badge"
 import { Panel, PanelEmpty, PanelHeader, PageHeader } from "../components/ui/panel"
@@ -15,6 +16,7 @@ export function Accounts({
   login,
   onLoginStarted,
   onCopy,
+  onDelete,
 }: {
   data: Dashboard | null
   loading: boolean
@@ -22,6 +24,7 @@ export function Accounts({
   login: Login | null
   onLoginStarted: (login: Login) => void
   onCopy: (value: string) => void
+  onDelete: (accountId: string) => Promise<void>
 }) {
   const accounts = data?.gateways ?? []
   const activeCount = accounts.filter((account) => account.active).length
@@ -57,7 +60,7 @@ export function Accounts({
         ) : accounts.length ? (
           <ul className="divide-y divide-line">
             {accounts.map((account) => (
-              <AccountRow key={account.id} account={account} busiest={busiest} />
+              <AccountRow key={account.id} account={account} busiest={busiest} onDelete={onDelete} />
             ))}
           </ul>
         ) : (
@@ -72,7 +75,15 @@ export function Accounts({
   )
 }
 
-function AccountRow({ account, busiest }: { account: Gateway; busiest: number }) {
+function AccountRow({
+  account,
+  busiest,
+  onDelete,
+}: {
+  account: Gateway
+  busiest: number
+  onDelete: (accountId: string) => Promise<void>
+}) {
   const used = account.used_today ?? 0
   const share = busiest > 0 ? Math.max(used / busiest, used > 0 ? 0.06 : 0) : 0
 
@@ -109,6 +120,7 @@ function AccountRow({ account, busiest }: { account: Gateway; busiest: number })
         <Badge tone={account.active ? "success" : "warning"} dot>
           {account.active ? "Active" : "Cooling down"}
         </Badge>
+        <DeleteAccountDialog account={account} onDelete={onDelete} />
       </div>
     </li>
   )

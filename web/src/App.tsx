@@ -4,7 +4,7 @@ import { AccessGate } from "./components/access-gate"
 import { Sidebar, TopBar } from "./components/app-shell"
 import { Callout } from "./components/ui/callout"
 import { ToastRegion } from "./components/ui/toast"
-import { ApiError, fetchDashboard, fetchLogin, type Dashboard, type Login } from "./lib/api"
+import { ApiError, deleteAccount, fetchDashboard, fetchLogin, type Dashboard, type Login } from "./lib/api"
 import { viewFromHash, type View } from "./lib/navigation"
 import { clearSession, loadSession, saveSession } from "./lib/session"
 import { useTheme } from "./lib/theme"
@@ -141,6 +141,12 @@ export default function App() {
     selectView("accounts")
   }
 
+  async function handleDeleteAccount(accountId: string) {
+    await deleteAccount(accountId, gatewayKey)
+    await loadDashboard(gatewayKey, { silent: true })
+    push(`${accountId} deleted.`, "success")
+  }
+
   async function unlock(key: string) {
     saveSession(key)
     setGatewayKey(key)
@@ -192,6 +198,7 @@ export default function App() {
                 login={login}
                 onLoginStarted={handleLoginStarted}
                 onCopy={copyCode}
+                onDelete={handleDeleteAccount}
               />
             )}
           </div>
