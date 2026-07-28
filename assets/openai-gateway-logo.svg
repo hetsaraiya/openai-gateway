@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900">
+  <rect width="1600" height="900" rx="40" fill="#F5F7FF"/>
+  <g transform="translate(576 170) scale(18.6667)" fill="none" stroke="#3A56D4"
+     stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M4.45 6.4a9.4 9.4 0 0 1 15.1 0"/>
+    <path d="M4.45 17.6a9.4 9.4 0 0 0 15.1 0"/>
+    <path d="M1.7 9.2h6.5l3.4 2.8"/>
+    <path d="M1.7 14.8h6.5l3.4-2.8"/>
+    <path d="M1.7 12h18"/>
+    <path d="m18.1 8.7 3.3 3.3-3.3 3.3"/>
+  </g>
+  <text x="800" y="690" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif"
+        font-size="94" font-weight="700" letter-spacing="-3" fill="#172033">OpenAI Gateway</text>
+  <text x="800" y="758" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif"
+        font-size="30" font-weight="500" letter-spacing="4" fill="#647099">ONE ENDPOINT · MANY SUBSCRIPTIONS</text>
+</svg>

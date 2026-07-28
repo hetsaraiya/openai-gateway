@@ -1,13 +1,81 @@
-# OpenAI Gateway
+<div align="center">
+  <img src="./assets/openai-gateway-logo.svg" alt="OpenAI Gateway logo" width="680">
 
-An OpenAI-compatible gateway for routing requests through one or more Codex
-accounts. It supports `/v1/chat/completions` and `/v1/responses`.
+  **One OpenAI-compatible endpoint for multiple Codex and OpenCode Go subscriptions.**
 
-## Quick setup
+  [Portfolio](https://hetsaraiya.com/projects/openai-gateway) ·
+  [Spores](https://github.com/hetsaraiya/spores)
+</div>
+
+## Overview
+
+OpenAI Gateway lets applications use Codex subscription credentials through a
+familiar API surface. It discovers the models available to each configured
+account, refreshes OAuth tokens, routes requests across healthy accounts, and
+translates Chat Completions requests to the upstream Responses protocol.
+
+The gateway was originally built for
+[Spores](https://github.com/hetsaraiya/spores), where disposable coding
+sandboxes need one stable endpoint without receiving every upstream credential.
+It now also supports optional OpenCode Go subscription keys.
+
+> Use only accounts, subscriptions, and workloads that you are authorized to
+> operate. Upstream APIs and account terms may change independently of this
+> project.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    Client["OpenAI-compatible client"] -->|"Gateway API key"| API["FastAPI gateway"]
+    API --> Catalog["Live model catalog"]
+    API --> Router["Account router"]
+    API --> Dedup["Redis idempotency cache"]
+    Router -->|"fallback / round robin / quota aware"| Accounts["Healthy account pool"]
+    Accounts --> Codex["Codex backend"]
+    Accounts --> OpenCode["OpenCode Go"]
+    API --> Dashboard["Authenticated dashboard"]
+```
+
+## Features
+
+- OpenAI-compatible `chat/completions`, `responses`, and model-list endpoints.
+- Anthropic-compatible `messages` requests for supported OpenCode Go models.
+- Multiple Codex accounts loaded from individual credential files.
+- Automatic OAuth refresh with refreshed credentials persisted to disk.
+- `fallback`, `round_robin`, and `quota_aware` routing strategies.
+- Temporary account cooldown after rate limits and bounded retry attempts.
+- Redis-backed `Idempotency-Key` deduplication to prevent duplicate work.
+- Streaming and non-streaming response translation.
+- Device-login and credential-management endpoints for adding accounts.
+- An authenticated dashboard for inspecting providers, models, and health.
+- Structured request logging with per-request identifiers.
+
+## API surface
+
+| Method | Endpoint | Purpose |
+| --- | --- | --- |
+| `GET` | `/healthz` | Liveness and dependency health |
+| `GET` | `/v1/models` | Models available across configured providers |
+| `POST` | `/v1/chat/completions` | OpenAI-compatible chat completions |
+| `POST` | `/v1/responses` | Responses API passthrough |
+| `POST` | `/v1/messages` | Anthropic-compatible OpenCode Go requests |
+| `GET` | `/dashboard` | Browser-based gateway dashboard |
+| `GET` | `/admin/status` | Account and routing status |
+
+Except for `/healthz` and the dashboard shell, gateway and administration
+routes require the configured master key.
+
+## Quick start
+
+### Prerequisites
+
+- Python 3.12 or newer
+- [uv](https://docs.astral.sh/uv/)
+- Redis
+- The [Codex CLI](https://github.com/openai/codex) for account sign-in
 
 ### 1. Install
-
-Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/).
 
 ```bash
 git clone https://github.com/hetsaraiya/openai-gateway.git
@@ -15,41 +83,45 @@ cd openai-gateway
 uv sync
 ```
 
-### 2. Configure an account and environment
+### 2. Add an account
 
-Sign in with the Codex CLI, then copy its generated credentials into this
-project. Repeat for each account you want the gateway to use.
+Sign in with Codex, then copy its generated credentials into the gateway. Use a
+different JSON filename for each additional account.
 
 ```bash
 codex login
 mkdir -p auth
 cp ~/.codex/auth.json auth/main.json
-
-cp .env.example .env
-# Edit .env and set GATEWAY_API_KEY to a long, random value.
 ```
 
-`auth/` is gitignored. The gateway refreshes tokens, so keep this directory
-writable and persistent.
+The `auth/` directory is ignored by Git. Keep it writable and persistent so the
+gateway can save refreshed tokens.
 
-### 3. Start the gateway
+### 3. Configure the gateway
 
-Start Redis, then run the app:
+```bash
+cp .env.example .env
+```
+
+Set `GATEWAY_API_KEY` in `.env` to a long, random secret. The other settings
+have development-friendly defaults.
+
+### 4. Start Redis and the API
 
 ```bash
 docker run -d --name openai-gateway-redis -p 6379:6379 redis:7-alpine
 uv run uvicorn app.main:app --reload
 ```
 
-The gateway listens at `http://localhost:8000`. Confirm it is running:
+The gateway listens on `http://localhost:8000`.
 
 ```bash
 curl http://localhost:8000/healthz
 ```
 
-## Use it
+## Client example
 
-Point an OpenAI client at the local `/v1` endpoint and use the gateway key:
+Point any OpenAI-compatible SDK at the gateway's `/v1` base URL:
 
 ```python
 from openai import OpenAI
@@ -61,46 +133,82 @@ client = OpenAI(
 
 response = client.chat.completions.create(
     model="gpt-5.1-codex",
-    messages=[{"role": "user", "content": "Hello"}],
+    messages=[{"role": "user", "content": "Hello from the gateway"}],
 )
+
 print(response.choices[0].message.content)
 ```
 
-Available models are exposed at `GET /v1/models`. The authenticated dashboard at
-`GET /dashboard` shows providers, models, and the endpoint supported by each
-model.
-
-Codex models support `POST /v1/responses` and `POST /v1/chat/completions`.
-OpenCode Go models use either `POST /v1/chat/completions` or, for the models
-published with Anthropic compatibility, `POST /v1/messages`. Use the
-`opencode-go/<model-id>` model name at the gateway boundary in both cases.
+Query `GET /v1/models` to use model IDs actually available to the configured
+accounts. OpenCode Go models use the `opencode-go/<model-id>` prefix at the
+gateway boundary.
 
 ## Configuration
 
-Copy `.env.example` to `.env`. Usually only `GATEWAY_API_KEY` is required.
-
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `GATEWAY_API_KEY` | required | Key clients use to access the gateway |
-| `AUTH_DIR` | `auth` | Directory containing Codex credential JSON files |
+| `GATEWAY_API_KEY` | required | Master key presented by clients |
+| `AUTH_DIR` | `auth` | Directory containing account credential JSON files |
 | `REDIS_URL` | `redis://localhost:6379/0` | Redis connection URL |
 | `ROUTING_STRATEGY` | `fallback` | `fallback`, `round_robin`, or `quota_aware` |
-| `DEFAULT_MODEL` | empty | Model to use when a chat request omits one |
+| `RATE_LIMIT_COOLDOWN` | `60` | Seconds to bench a rate-limited account |
+| `MAX_ACCOUNT_ATTEMPTS` | `3` | Maximum accounts tried for one request |
+| `REQUEST_TIMEOUT` | `600` | Upstream timeout in seconds |
+| `DEFAULT_MODEL` | empty | Model used when a chat request omits one |
+| `DEDUP_ENABLED` | `true` | Enable idempotency-key deduplication |
+| `DEDUP_TTL` | `600` | Deduplicated response lifetime in seconds |
+| `OPENCODE_GO_API_KEYS` | empty | Optional comma-separated subscription keys |
 
-See [`.env.example`](.env.example) for all optional settings.
+See [`.env.example`](./.env.example) for upstream URLs, OAuth behavior, catalog
+caching, and every optional setting.
+
+### Routing strategies
+
+- `fallback` walks the account list in priority order until one succeeds.
+- `round_robin` spreads new requests across currently healthy accounts.
+- `quota_aware` prefers the account with the most usable quota information.
+
+When an upstream returns a rate limit, the account enters a temporary cooldown
+and the request may be retried on another account up to
+`MAX_ACCOUNT_ATTEMPTS`.
 
 ## Docker Compose
 
-With `.env` configured and credentials in `auth/`:
+With `.env` configured and credentials stored in `auth/`:
 
 ```bash
-sudo chown -R 10001:10001 auth && chmod 700 auth
+sudo chown -R 10001:10001 auth
+chmod 700 auth
 docker compose up --build
 ```
 
-The gateway will be available on port 8000.
+The Compose stack starts both Redis and the gateway on port `8000`.
 
-## Notes
+## Development
 
-Use only accounts and workloads you are authorized to operate. The upstream
-Codex backend may change without notice.
+Run the test suite:
+
+```bash
+uv run pytest
+```
+
+Key directories:
+
+```text
+.
+├── app/         API, routing, credentials, translation, and observability
+├── auth/        Runtime credential files; ignored by Git
+├── tests/       Async unit and integration tests
+├── web/         Dashboard source and brand assets
+└── Dockerfile   Production container image
+```
+
+## Security notes
+
+- Never commit `.env`, account JSON, subscription keys, or access tokens.
+- Use a unique, high-entropy gateway key and terminate TLS at the deployment
+  boundary.
+- Restrict the dashboard and administration routes to trusted operators.
+- Mount `AUTH_DIR` as a private persistent volume with narrow permissions.
+- Treat the gateway as privileged infrastructure: its master key can reach
+  every configured account.
