@@ -6,6 +6,7 @@ import { DeviceLogin } from "../components/device-login"
 import { Badge } from "../components/ui/badge"
 import { Panel, PanelEmpty, PanelHeader, PageHeader } from "../components/ui/panel"
 import { SkeletonRows } from "../components/ui/skeleton"
+import { TestAccountButton } from "../components/test-account-button"
 import type { Dashboard, Gateway, Login } from "../lib/api"
 import { compactNumber, fullNumber } from "../lib/utils"
 
@@ -17,6 +18,7 @@ export function Accounts({
   onLoginStarted,
   onAccountAdded,
   onCopy,
+  onTest,
   onDelete,
 }: {
   data: Dashboard | null
@@ -26,6 +28,7 @@ export function Accounts({
   onLoginStarted: (login: Login) => void
   onAccountAdded: (accountId: string) => void
   onCopy: (value: string) => void
+  onTest: (accountId: string) => Promise<void>
   onDelete: (accountId: string) => Promise<void>
 }) {
   const accounts = data?.gateways ?? []
@@ -91,7 +94,7 @@ export function Accounts({
         ) : accounts.length ? (
           <ul className="divide-y divide-line">
             {accounts.map((account) => (
-              <AccountRow key={account.id} account={account} busiest={busiest} onDelete={onDelete} />
+              <AccountRow key={account.id} account={account} busiest={busiest} onTest={onTest} onDelete={onDelete} />
             ))}
           </ul>
         ) : (
@@ -109,10 +112,12 @@ export function Accounts({
 function AccountRow({
   account,
   busiest,
+  onTest,
   onDelete,
 }: {
   account: Gateway
   busiest: number
+  onTest: (accountId: string) => Promise<void>
   onDelete: (accountId: string) => Promise<void>
 }) {
   const used = account.used_today ?? 0
@@ -151,6 +156,7 @@ function AccountRow({
         <Badge tone={account.active ? "success" : "warning"} dot>
           {account.active ? "Active" : "Cooling down"}
         </Badge>
+        <TestAccountButton accountId={account.id} onTest={onTest} />
         <DeleteAccountDialog account={account} onDelete={onDelete} />
       </div>
     </li>

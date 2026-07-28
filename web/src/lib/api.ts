@@ -118,6 +118,14 @@ export function deleteAccount(accountId: string, key: string) {
   )
 }
 
+export function testAccount(accountId: string, key: string) {
+  return request<{ status: "ok"; account: string; provider: string; latency_ms: number }>(
+    `/admin/accounts/${encodeURIComponent(accountId)}/test`,
+    key,
+    { method: "POST" },
+  )
+}
+
 export function providerFor(model: Model) {
   return model.gateway ?? (model.id.startsWith("opencode-go/") ? "opencode-go" : "codex")
 }

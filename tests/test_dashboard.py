@@ -107,6 +107,93 @@ async def test_delete_account_removes_router_entry_and_auth_file(tmp_path, quota
 
 
 @pytest.mark.asyncio
+async def test_account_test_calls_selected_codex_account_models_endpoint(tmp_path, quota, monkeypatch):
+    settings = make_settings()
+    account = make_account(tmp_path, "primary", account_id="chatgpt-primary", settings=settings)
+    monkeypatch.setattr("app.auth.get_settings", lambda: settings)
+    app.state.settings = settings
+    app.state.router = AccountRouter(settings, [account], quota)
+
+    async def upstream(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/backend/models"
+        assert request.url.params["client_version"] == settings.codex_client_version
+        assert request.headers["authorization"] == f"Bearer {account.access_token}"
+        assert request.headers["chatgpt-account-id"] == "chatgpt-primary"
+        return httpx.Response(200, json={"models": []})
+
+    app.state.client = httpx.AsyncClient(transport=httpx.MockTransport(upstream))
+    transport = httpx.ASGITransport(app=app)
+    try:
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.post(
+                "/admin/accounts/primary/test",
+                headers={"X-Gateway-Key": "test-master"},
+            )
+    finally:
+        await app.state.client.aclose()
+
+    assert response.status_code == 200
+    assert response.json()["account"] == "primary"
+    assert response.json()["provider"] == "codex"
+    assert response.json()["latency_ms"] >= 1
+
+
+@pytest.mark.asyncio
+async def test_account_test_calls_selected_opencode_go_models_endpoint(quota, monkeypatch):
+    settings = make_settings()
+    account = OpenCodeGoAccount(None, {"api_key": "go_test_123456"}, settings, "go-primary")
+    monkeypatch.setattr("app.auth.get_settings", lambda: settings)
+    app.state.settings = settings
+    app.state.router = AccountRouter(settings, [account], quota)
+
+    async def upstream(request: httpx.Request) -> httpx.Response:
+        assert request.url == f"{settings.opencode_go_base_url}/models"
+        assert request.headers["authorization"] == "Bearer go_test_123456"
+        return httpx.Response(200, json={"data": []})
+
+    app.state.client = httpx.AsyncClient(transport=httpx.MockTransport(upstream))
+    transport = httpx.ASGITransport(app=app)
+    try:
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.post(
+                "/admin/accounts/go-primary/test",
+                headers={"X-Gateway-Key": "test-master"},
+            )
+    finally:
+        await app.state.client.aclose()
+
+    assert response.status_code == 200
+    assert response.json()["account"] == "go-primary"
+    assert response.json()["provider"] == "opencode-go"
+
+
+@pytest.mark.asyncio
+async def test_account_test_reports_upstream_rejection(tmp_path, quota, monkeypatch):
+    settings = make_settings()
+    account = make_account(tmp_path, "broken", settings=settings)
+    monkeypatch.setattr("app.auth.get_settings", lambda: settings)
+    app.state.settings = settings
+    app.state.router = AccountRouter(settings, [account], quota)
+    app.state.client = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(401))
+    )
+
+    transport = httpx.ASGITransport(app=app)
+    try:
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.post(
+                "/admin/accounts/broken/test",
+                headers={"X-Gateway-Key": "test-master"},
+            )
+    finally:
+        await app.state.client.aclose()
+
+    assert response.status_code == 502
+    assert response.json()["error"]["code"] == "account_test_failed"
+    assert "HTTP 401" in response.json()["error"]["message"]
+
+
+@pytest.mark.asyncio
 async def test_messages_rejects_opencode_models_without_messages_support(quota, monkeypatch):
     settings = make_settings()
     monkeypatch.setattr("app.auth.get_settings", lambda: settings)

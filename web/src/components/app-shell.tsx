@@ -24,6 +24,7 @@ import { AccountDialog } from "./account-dialog"
 import { Brand } from "./brand"
 import { DeleteAccountDialog } from "./delete-account-dialog"
 import { ThemeToggle } from "./theme-toggle"
+import { TestAccountButton } from "./test-account-button"
 import { Button } from "./ui/button"
 
 type SidebarProps = {
@@ -35,6 +36,7 @@ type SidebarProps = {
   onSelectProvider: (provider: string) => void
   onLoginStarted: (login: Login) => void
   onAccountAdded: (accountId: string) => void
+  onTest: (accountId: string) => Promise<void>
   onDelete: (accountId: string) => Promise<void>
   mobileOpen: boolean
   onCloseMobile: () => void
@@ -50,6 +52,7 @@ export function Sidebar({
   onSelectProvider,
   onLoginStarted,
   onAccountAdded,
+  onTest,
   onDelete,
   mobileOpen,
   onCloseMobile,
@@ -172,7 +175,7 @@ export function Sidebar({
                     {isExpanded ? (
                       <div className="mx-2 mb-2 border-l border-line pl-2">
                         {providerAccounts.map((account) => (
-                          <SidebarAccount key={account.id} account={account} onDelete={onDelete} />
+                          <SidebarAccount key={account.id} account={account} onTest={onTest} onDelete={onDelete} />
                         ))}
                         {!providerAccounts.length ? (
                           <p className="px-2 py-2 text-[11px] text-subtle">No accounts connected</p>
@@ -232,7 +235,15 @@ function ProviderIcon({ provider }: { provider: string }) {
   )
 }
 
-function SidebarAccount({ account, onDelete }: { account: Gateway; onDelete: (accountId: string) => Promise<void> }) {
+function SidebarAccount({
+  account,
+  onTest,
+  onDelete,
+}: {
+  account: Gateway
+  onTest: (accountId: string) => Promise<void>
+  onDelete: (accountId: string) => Promise<void>
+}) {
   return (
     <div className="group flex min-w-0 items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-inset">
       <span
@@ -241,6 +252,7 @@ function SidebarAccount({ account, onDelete }: { account: Gateway; onDelete: (ac
       />
       <KeyRound size={12} className="shrink-0 text-subtle" aria-hidden="true" />
       <span className="min-w-0 flex-1 truncate text-[11px] text-muted">{account.id}</span>
+      <TestAccountButton accountId={account.id} onTest={onTest} />
       <DeleteAccountDialog account={account} onDelete={onDelete} />
     </div>
   )

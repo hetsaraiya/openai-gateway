@@ -4,7 +4,7 @@ import { AccessGate } from "./components/access-gate"
 import { Sidebar, TopBar } from "./components/app-shell"
 import { Callout } from "./components/ui/callout"
 import { ToastRegion } from "./components/ui/toast"
-import { ApiError, deleteAccount, fetchDashboard, fetchLogin, type Dashboard, type Login } from "./lib/api"
+import { ApiError, deleteAccount, fetchDashboard, fetchLogin, testAccount, type Dashboard, type Login } from "./lib/api"
 import { viewFromHash, type View } from "./lib/navigation"
 import { clearSession, loadSession, saveSession } from "./lib/session"
 import { useTheme } from "./lib/theme"
@@ -153,6 +153,17 @@ export default function App() {
     push(`${accountId} deleted.`, "success")
   }
 
+  async function handleTestAccount(accountId: string) {
+    try {
+      const result = await testAccount(accountId, gatewayKey)
+      push(`${accountId} is connected · ${result.latency_ms} ms`, "success")
+    } catch (cause) {
+      const message = (cause as ApiError).message
+      push(`${accountId}: ${message}`, "danger")
+      throw cause
+    }
+  }
+
   async function unlock(key: string) {
     saveSession(key)
     setGatewayKey(key)
@@ -179,6 +190,7 @@ export default function App() {
         }}
         onLoginStarted={handleLoginStarted}
         onAccountAdded={handleAccountAdded}
+        onTest={handleTestAccount}
         onDelete={handleDeleteAccount}
         mobileOpen={mobileOpen}
         onCloseMobile={() => setMobileOpen(false)}
@@ -221,6 +233,7 @@ export default function App() {
                 onLoginStarted={handleLoginStarted}
                 onAccountAdded={handleAccountAdded}
                 onCopy={copyCode}
+                onTest={handleTestAccount}
                 onDelete={handleDeleteAccount}
               />
             )}

@@ -55,6 +55,8 @@ from .proxy import (
     OPENCODE_GO_MESSAGES_ENDPOINT,
     OPENCODE_GO_MESSAGES_MODELS,
     OpenCodeGoProxy,
+    build_codex_headers,
+    build_opencode_go_headers,
     is_opencode_go_model,
     strip_opencode_go_model,
 )
@@ -322,6 +324,56 @@ async def delete_account(account_id: str, request: Request) -> Response:
         return _error(404, f"no account '{account_id}'", "account_not_found")
     log.info("account %s deleted via API", account_id)
     return JSONResponse({"status": "ok", "account": account_id, "deleted": True})
+
+
+@app.post("/admin/accounts/{account_id}/test", dependencies=[Depends(require_master_key)])
+async def test_account(account_id: str, request: Request) -> Response:
+    """Test one account with a read-only request to its provider's model catalog."""
+    if not valid_account_id(account_id):
+        return _error(400, "invalid account id", "invalid_account_id", "invalid_request_error")
+
+    s = request.app.state
+    account = next((item for item in s.router.accounts() if item.id == account_id), None)
+    if account is None:
+        return _error(404, f"no account '{account_id}'", "account_not_found")
+
+    provider = getattr(account, "provider", "codex")
+    started = time.perf_counter()
+    try:
+        await account.ensure_fresh(s.client)
+        if provider == "opencode-go":
+            response = await s.client.get(
+                f"{s.settings.opencode_go_base_url}/models",
+                headers=build_opencode_go_headers(account, stream=False),
+                timeout=30.0,
+            )
+        else:
+            response = await s.client.get(
+                f"{s.settings.codex_base_url}/models",
+                params={"client_version": s.settings.codex_client_version},
+                headers=build_codex_headers(s.settings, account, stream=False),
+                timeout=30.0,
+            )
+    except (CredentialError, httpx.HTTPError) as exc:
+        log.warning("account test failed for %s: %s", account_id, exc)
+        return _error(502, f"{provider} could not be reached with this account",
+                      "account_test_failed")
+
+    latency_ms = max(1, round((time.perf_counter() - started) * 1000))
+    if not response.is_success:
+        log.warning("account test failed for %s: upstream HTTP %s", account_id, response.status_code)
+        return _error(
+            502,
+            f"{provider} rejected this account (HTTP {response.status_code})",
+            "account_test_failed",
+        )
+
+    return JSONResponse({
+        "status": "ok",
+        "account": account_id,
+        "provider": provider,
+        "latency_ms": latency_ms,
+    })
 
 
 @app.post("/admin/accounts/{account_id}/login/device", dependencies=[Depends(require_master_key)])
