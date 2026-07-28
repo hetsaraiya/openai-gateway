@@ -369,6 +369,11 @@ function ModelCard({ model }: { model: Model }) {
             {modality}
           </span>
         ))}
+        {model.prompt_caching ? (
+          <span className="rounded-md border border-success/20 bg-success-soft px-2 py-1 text-[10px] text-success">
+            prompt cache
+          </span>
+        ) : null}
         {endpoints.map((endpoint) => (
           <span
             key={endpoint}

@@ -24,6 +24,7 @@ log = logging.getLogger("gateway.proxy")
 
 _RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 OPENCODE_GO_MODEL_PREFIX = "opencode-go/"
+XAI_MODEL_PREFIX = "xai/"
 
 # OpenCode Go publishes two model-specific inference surfaces.  Keep this
 # mapping here so routing and the dashboard describe the same capability.
@@ -34,6 +35,7 @@ OPENCODE_GO_MESSAGES_MODELS = frozenset({
     "minimax-m3", "minimax-m2.7", "minimax-m2.5",
     "qwen3.7-max", "qwen3.7-plus", "qwen3.6-plus",
 })
+XAI_SUPPORTED_ENDPOINTS = ("/v1/chat/completions", "/v1/responses")
 
 
 def build_codex_headers(settings: Settings, acct: CodexAccount, stream: bool) -> dict:
@@ -159,6 +161,25 @@ def build_opencode_go_messages_headers(acct) -> dict:
     }
 
 
+def is_xai_model(model: Optional[str]) -> bool:
+    return bool(model and model.startswith(XAI_MODEL_PREFIX))
+
+
+def strip_xai_model(model: str) -> str:
+    return model[len(XAI_MODEL_PREFIX):]
+
+
+def build_xai_headers(acct, stream: bool, conversation_id: Optional[str] = None) -> dict:
+    headers = {
+        "Authorization": f"Bearer {acct.access_token}",
+        "Content-Type": "application/json",
+        "Accept": "text/event-stream" if stream else "application/json",
+    }
+    if conversation_id:
+        headers["x-grok-conv-id"] = conversation_id
+    return headers
+
+
 class OpenCodeGoProxy:
     def __init__(self, settings: Settings, router: AccountRouter, client: httpx.AsyncClient):
         self._settings = settings
@@ -243,3 +264,79 @@ class OpenCodeGoProxy:
             return acct, resp
 
         raise AllAccountsFailed(f"all OpenCode Go Messages attempts failed ({last_error})")
+
+
+class XAIProxy:
+    """OpenAI-compatible xAI inference proxy with account failover."""
+
+    def __init__(self, settings: Settings, router: AccountRouter, client: httpx.AsyncClient):
+        self._settings = settings
+        self._router = router
+        self._client = client
+
+    @staticmethod
+    def _retry_after(resp: httpx.Response) -> Optional[int]:
+        val = resp.headers.get("retry-after")
+        try:
+            return int(float(val)) if val else None
+        except ValueError:
+            return None
+
+    async def open_chat(
+        self, chat_body: dict, conversation_id: Optional[str] = None
+    ) -> tuple[object, httpx.Response]:
+        body = dict(chat_body)
+        body["model"] = strip_xai_model(str(body.get("model") or ""))
+        body.pop("prompt_cache_key", None)
+        return await self._open(
+            "/chat/completions",
+            body,
+            stream=bool(body.get("stream")),
+            conversation_id=conversation_id,
+        )
+
+    async def open_responses(self, responses_body: dict) -> tuple[object, httpx.Response]:
+        body = dict(responses_body)
+        body["model"] = strip_xai_model(str(body.get("model") or ""))
+        return await self._open(
+            "/responses",
+            body,
+            stream=bool(body.get("stream")),
+        )
+
+    async def _open(
+        self,
+        path: str,
+        body: dict,
+        stream: bool,
+        conversation_id: Optional[str] = None,
+    ) -> tuple[object, httpx.Response]:
+        candidates = await self._router.candidates("xai")
+        last_error = "no attempts made"
+        for acct in candidates:
+            try:
+                await acct.ensure_fresh(self._client)
+                req = self._client.build_request(
+                    "POST",
+                    f"{self._settings.xai_base_url}{path}",
+                    headers=build_xai_headers(acct, stream, conversation_id),
+                    json=body,
+                    timeout=self._settings.request_timeout,
+                )
+                resp = await self._client.send(req, stream=True)
+            except (CredentialError, httpx.ConnectError, httpx.ReadTimeout, httpx.RemoteProtocolError) as exc:
+                last_error = f"{acct.id}: {exc}"
+                log.warning("xAI request failed on %s: %s", acct.id, exc)
+                continue
+
+            if resp.status_code in _RETRYABLE_STATUS:
+                if resp.status_code == 429:
+                    await self._router.record_rate_limited(acct, self._retry_after(resp))
+                last_error = f"{acct.id}: HTTP {resp.status_code}"
+                await resp.aclose()
+                continue
+
+            await self._router.record_success(acct)
+            return acct, resp
+
+        raise AllAccountsFailed(f"all xAI attempts failed ({last_error})")

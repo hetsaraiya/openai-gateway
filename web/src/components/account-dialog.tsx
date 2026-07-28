@@ -1,7 +1,7 @@
 import { ArrowUpRight, KeyRound, LoaderCircle, Plus } from "lucide-react"
 import { type ReactNode, useState } from "react"
 
-import { addOpenCodeKey, ApiError, providerLabel, startDeviceLogin, type Login } from "../lib/api"
+import { addOpenCodeKey, addXAIKey, ApiError, providerLabel, startDeviceLogin, type Login } from "../lib/api"
 import { Button } from "./ui/button"
 import { Dialog, DialogContent, DialogHeader, DialogTrigger } from "./ui/dialog"
 import { Field, Input } from "./ui/input"
@@ -31,7 +31,7 @@ export function AccountDialog({
   const [busy, setBusy] = useState(false)
 
   const trimmed = account.trim()
-  const isOpenCode = provider === "opencode-go"
+  const isApiKeyProvider = provider === "opencode-go" || provider === "xai"
   const invalid = trimmed.length > 0 && !VALID_ID.test(trimmed)
 
   function reset(next: boolean) {
@@ -51,8 +51,9 @@ export function AccountDialog({
     setError("")
     setBusy(true)
     try {
-      if (isOpenCode) {
-        const result = await addOpenCodeKey(
+      if (isApiKeyProvider) {
+        const addKey = provider === "xai" ? addXAIKey : addOpenCodeKey
+        const result = await addKey(
           {
             api_key: apiKey.trim(),
             ...(trimmed ? { identifier: trimmed } : {}),
@@ -85,15 +86,15 @@ export function AccountDialog({
         <DialogHeader
           title={`Add ${providerLabel(provider)} account`}
           description={
-            isOpenCode
-              ? "Add a subscription API key. It is encrypted and stored by the gateway."
+            isApiKeyProvider
+              ? `Add an ${providerLabel(provider)} API key. It is stored securely by the gateway.`
               : "Name the account, then finish the secure OpenAI device sign-in in your browser."
           }
         />
         <form className="mt-6 space-y-4" onSubmit={submit} noValidate>
-          {isOpenCode && (
+          {isApiKeyProvider && (
             <Field
-              label="Subscription API key"
+              label={provider === "xai" ? "Inference API key" : "Subscription API key"}
               htmlFor="provider-api-key"
               hint="The key is sent directly to your gateway and is never saved in this browser."
             >
@@ -103,7 +104,7 @@ export function AccountDialog({
                 type="password"
                 value={apiKey}
                 onChange={(event) => setApiKey(event.target.value)}
-                placeholder="Enter API key"
+                placeholder={provider === "xai" ? "xai-…" : "Enter API key"}
                 autoComplete="off"
                 spellCheck={false}
                 autoFocus
@@ -115,7 +116,7 @@ export function AccountDialog({
             label="Account identifier"
             htmlFor="account-id"
             hint={
-              isOpenCode
+              isApiKeyProvider
                 ? "Optional. Leave blank to generate a unique identifier."
                 : "Letters, numbers, periods, hyphens, and underscores."
             }
@@ -129,13 +130,13 @@ export function AccountDialog({
               placeholder="engineering-team"
               autoComplete="off"
               spellCheck={false}
-              autoFocus={!isOpenCode}
+              autoFocus={!isApiKeyProvider}
               aria-describedby="account-id-hint"
               aria-invalid={invalid || Boolean(error) ? true : undefined}
             />
           </Field>
 
-          {isOpenCode && (
+          {isApiKeyProvider && (
             <Field label="Display label" htmlFor="account-label" hint="Optional. Helps your team recognize this key.">
               <Input
                 id="account-label"
@@ -152,15 +153,15 @@ export function AccountDialog({
             <Button variant="ghost" onClick={() => reset(false)}>
               Cancel
             </Button>
-            <Button type="submit" disabled={invalid || busy || (isOpenCode ? !apiKey.trim() : !trimmed)}>
+            <Button type="submit" disabled={invalid || busy || (isApiKeyProvider ? !apiKey.trim() : !trimmed)}>
               {busy ? (
                 <LoaderCircle size={16} className="animate-spin" aria-hidden="true" />
-              ) : isOpenCode ? (
+              ) : isApiKeyProvider ? (
                 <KeyRound size={16} aria-hidden="true" />
               ) : (
                 <ArrowUpRight size={16} aria-hidden="true" />
               )}
-              {busy ? "Adding…" : isOpenCode ? "Add API key" : "Continue to OpenAI"}
+              {busy ? "Adding…" : isApiKeyProvider ? "Add API key" : "Continue to OpenAI"}
             </Button>
           </div>
         </form>

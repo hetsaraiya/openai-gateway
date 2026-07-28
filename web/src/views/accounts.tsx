@@ -1,4 +1,4 @@
-import { Cloud, KeyRound, Plus } from "lucide-react"
+import { Cloud, KeyRound, Plus, Zap } from "lucide-react"
 
 import { AccountDialog } from "../components/account-dialog"
 import { DeleteAccountDialog } from "../components/delete-account-dialog"
@@ -60,6 +60,19 @@ export function Accounts({
             <AccountDialog
               gatewayKey={gatewayKey}
               disabled={!gatewayKey.trim()}
+              provider="xai"
+              trigger={
+                <button className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-line bg-surface px-4 text-sm font-medium text-ink shadow-panel transition-colors hover:border-line-strong hover:bg-elevated">
+                  <Zap size={16} aria-hidden="true" />
+                  xAI API key
+                </button>
+              }
+              onLoginStarted={onLoginStarted}
+              onAccountAdded={onAccountAdded}
+            />
+            <AccountDialog
+              gatewayKey={gatewayKey}
+              disabled={!gatewayKey.trim()}
               provider="opencode-go"
               trigger={
                 <button className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-line bg-surface px-4 text-sm font-medium text-ink shadow-panel transition-colors hover:border-line-strong hover:bg-elevated">
@@ -101,7 +114,7 @@ export function Accounts({
           <PanelEmpty
             icon={<KeyRound size={18} aria-hidden="true" />}
             title="No accounts connected yet"
-            hint="Add an OpenAI account or OpenCode Go key to start routing requests."
+            hint="Add an OpenAI account, OpenCode Go key, or xAI API key to start routing requests."
           />
         )}
       </Panel>

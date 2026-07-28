@@ -45,6 +45,7 @@ from .models import (
     OpenCodeGoKeyCreate,
     ResponsesRequest,
     StatusResponse,
+    XAIKeyCreate,
 )
 from .observability import configure_logging, log_access, new_request_id, request_id_var
 from .proxy import (
@@ -55,10 +56,15 @@ from .proxy import (
     OPENCODE_GO_MESSAGES_ENDPOINT,
     OPENCODE_GO_MESSAGES_MODELS,
     OpenCodeGoProxy,
+    XAIProxy,
     build_codex_headers,
     build_opencode_go_headers,
+    build_xai_headers,
     is_opencode_go_model,
+    is_xai_model,
     strip_opencode_go_model,
+    strip_xai_model,
+    XAI_SUPPORTED_ENDPOINTS,
 )
 from .quota import QuotaStore
 from .router import AccountRouter, NoAccountAvailable
@@ -88,6 +94,7 @@ async def lifespan(app: FastAPI):
     client = httpx.AsyncClient(http2=True, timeout=settings.request_timeout)
     proxy = CodexProxy(settings, router, client)
     opencode_go_proxy = OpenCodeGoProxy(settings, router, client)
+    xai_proxy = XAIProxy(settings, router, client)
     catalog = ModelCatalog(settings, router, client)
     device_logins = DeviceLoginManager(settings, router)
 
@@ -97,6 +104,7 @@ async def lifespan(app: FastAPI):
     app.state.dedup = dedup
     app.state.proxy = proxy
     app.state.opencode_go_proxy = opencode_go_proxy
+    app.state.xai_proxy = xai_proxy
     app.state.catalog = catalog
     app.state.device_logins = device_logins
     app.state.client = client
@@ -201,7 +209,10 @@ def _dashboard_html() -> str:
       return String(value ?? "").replace(/[&<>"']/g, ch => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[ch]));
     }
     function gatewayLabel(model) {
-      return model.gateway || ((model.id || "").startsWith("opencode-go/") ? "opencode-go" : "codex");
+      if (model.gateway) return model.gateway;
+      if ((model.id || "").startsWith("opencode-go/")) return "opencode-go";
+      if ((model.id || "").startsWith("xai/")) return "xai";
+      return "codex";
     }
     function stat(label, value) { return `<div class="stat"><div class="label">${label}</div><div class="value">${cell(value)}</div></div>`; }
     async function load() {
@@ -347,6 +358,12 @@ async def test_account(account_id: str, request: Request) -> Response:
                 headers=build_opencode_go_headers(account, stream=False),
                 timeout=30.0,
             )
+        elif provider == "xai":
+            response = await s.client.get(
+                f"{s.settings.xai_base_url}/language-models",
+                headers=build_xai_headers(account, stream=False),
+                timeout=30.0,
+            )
         else:
             response = await s.client.get(
                 f"{s.settings.codex_base_url}/models",
@@ -435,6 +452,34 @@ async def add_opencode_go_key(payload: OpenCodeGoKeyCreate, request: Request) ->
     })
 
 
+@app.post("/v1/admin/xai/keys", dependencies=[Depends(require_master_key)])
+async def add_xai_key(payload: XAIKeyCreate, request: Request) -> Response:
+    """Persist and hot-load an xAI inference API key."""
+    s = request.app.state
+    account_id = payload.identifier or f"xai-{uuid4().hex}"
+    if not valid_account_id(account_id):
+        return _error(400, "invalid identifier: use letters, digits, '.', '_', '-'",
+                      "invalid_account_id", "invalid_request_error")
+
+    data = {"type": "xai", "api_key": payload.api_key}
+    if payload.label:
+        data["label"] = payload.label
+    try:
+        account = save_account_file(s.settings, account_id, data)
+    except CredentialError as exc:
+        return _error(400, str(exc), "invalid_api_key", "invalid_request_error")
+
+    replaced = s.router.add_account(account)
+    log.info("xAI key %s %s via API", account_id, "replaced" if replaced else "added")
+    return JSONResponse(status_code=200 if replaced else 201, content={
+        "status": "ok",
+        "id": account_id,
+        "label": payload.label,
+        "replaced": replaced,
+        "provider": "xai",
+    })
+
+
 @app.get("/v1/models", dependencies=[Depends(require_master_key)])
 async def list_models(request: Request) -> Response:
     # Live catalog fetched from the Codex backend (cached), never hardcoded.
@@ -501,7 +546,9 @@ def _dashboard_model(model: dict[str, Any]) -> dict[str, Any]:
     """Return a JSON-safe model row with endpoint capability information."""
     row = dict(model)
     model_id = str(row.get("id") or "")
-    provider = row.get("gateway") or ("opencode-go" if is_opencode_go_model(model_id) else "codex")
+    provider = row.get("gateway")
+    if not provider:
+        provider = "opencode-go" if is_opencode_go_model(model_id) else "xai" if is_xai_model(model_id) else "codex"
     row["gateway"] = provider
     endpoints = row.get("supported_endpoints")
     if not isinstance(endpoints, list) or not all(isinstance(item, str) for item in endpoints):
@@ -509,7 +556,7 @@ def _dashboard_model(model: dict[str, Any]) -> dict[str, Any]:
             upstream_id = strip_opencode_go_model(model_id) if is_opencode_go_model(model_id) else model_id
             endpoints = [OPENCODE_GO_MESSAGES_ENDPOINT if upstream_id in OPENCODE_GO_MESSAGES_MODELS else OPENCODE_GO_CHAT_ENDPOINT]
         else:
-            endpoints = list(CODEX_SUPPORTED_ENDPOINTS)
+            endpoints = list(XAI_SUPPORTED_ENDPOINTS if provider == "xai" else CODEX_SUPPORTED_ENDPOINTS)
     row["supported_endpoints"] = endpoints
     return row
 
@@ -530,6 +577,8 @@ def _dashboard_providers(gateways: list[dict[str, Any]], models: list[dict[str, 
             # Go's documented API is split by model family; individual model
             # rows below identify the exact endpoint to call.
             row["supported_endpoints"].update((OPENCODE_GO_CHAT_ENDPOINT, OPENCODE_GO_MESSAGES_ENDPOINT))
+        elif provider == "xai":
+            row["supported_endpoints"].update(XAI_SUPPORTED_ENDPOINTS)
     for model in models:
         provider = str(model["gateway"])
         row = grouped.setdefault(provider, {
@@ -571,6 +620,8 @@ async def chat_completions(request: Request, payload: ChatCompletionRequest) -> 
 
     if is_opencode_go_model(model):
         return await _serve_opencode_go_chat(request, s, chat, model, stream)
+    if is_xai_model(model):
+        return await _serve_xai_chat(request, s, chat, model, stream)
 
     if stream:
         acct, upstream, err = await _open(s.proxy, responses_body)
@@ -648,6 +699,8 @@ async def responses(request: Request, payload: ResponsesRequest) -> Response:
             "unsupported_endpoint",
             "invalid_request_error",
         )
+    if is_xai_model(rbody.get("model")):
+        return await _serve_xai_responses(request, s, rbody)
 
     client_stream = bool(rbody.get("stream"))
     rbody["stream"] = True          # the Codex backend always streams
@@ -703,6 +756,103 @@ async def _serve_opencode_go_chat(
                                  headers={"X-Gateway-Account": acct.id})
 
     return await _serve_opencode_go_nonstream(request, s, body)
+
+
+async def _serve_xai_chat(
+    request: Request, s, chat: dict, model: str, stream: bool
+) -> Response:
+    body = dict(chat)
+    body["model"] = model
+    body["stream"] = stream
+    conversation_id = request.headers.get("x-grok-conv-id") or body.get("prompt_cache_key")
+
+    async def open_upstream():
+        return await s.xai_proxy.open_chat(body, conversation_id=conversation_id)
+
+    if stream:
+        return await _serve_direct_stream(open_upstream)
+    return await _serve_direct_nonstream(request, s, open_upstream)
+
+
+async def _serve_xai_responses(request: Request, s, body: dict) -> Response:
+    upstream_body = dict(body)
+
+    async def open_upstream():
+        return await s.xai_proxy.open_responses(upstream_body)
+
+    if upstream_body.get("stream"):
+        return await _serve_direct_stream(open_upstream)
+    return await _serve_direct_nonstream(request, s, open_upstream)
+
+
+async def _serve_direct_stream(open_upstream: Callable) -> Response:
+    try:
+        acct, upstream = await open_upstream()
+    except NoAccountAvailable as exc:
+        return _error(503, str(exc), "no_account_available")
+    except AllAccountsFailed as exc:
+        return _error(exc.status_code, exc.detail, "upstream_unavailable")
+    if upstream.status_code >= 400:
+        return await _passthrough_error(acct.id, upstream)
+
+    async def gen():
+        try:
+            async for chunk in upstream.aiter_bytes():
+                yield chunk
+        finally:
+            await upstream.aclose()
+
+    return StreamingResponse(
+        gen(),
+        media_type=upstream.headers.get("content-type", "text/event-stream"),
+        headers={"X-Gateway-Account": acct.id},
+    )
+
+
+async def _serve_direct_nonstream(request: Request, s, open_upstream: Callable) -> Response:
+    dedup: DedupStore = s.dedup
+    idem_key = request.headers.get("idempotency-key")
+    use_dedup = s.settings.dedup_enabled and bool(idem_key)
+
+    if use_dedup:
+        try:
+            cached = await dedup.begin(idem_key)
+        except DuplicateInFlight as exc:
+            return _error(409, str(exc), "duplicate_in_flight", "gateway_duplicate_request")
+        if cached is not None:
+            return Response(
+                content=cached.body,
+                status_code=cached.status_code,
+                media_type="application/json",
+                headers={"X-Gateway-Account": cached.account_id, "X-Gateway-Dedup": "hit"},
+            )
+
+    try:
+        acct, upstream = await open_upstream()
+    except NoAccountAvailable as exc:
+        if use_dedup:
+            await dedup.release(idem_key)
+        return _error(503, str(exc), "no_account_available")
+    except AllAccountsFailed as exc:
+        if use_dedup:
+            await dedup.release(idem_key)
+        return _error(exc.status_code, exc.detail, "upstream_unavailable")
+
+    content = await upstream.aread()
+    status_code = upstream.status_code
+    media_type = upstream.headers.get("content-type", "application/json")
+    zdr = upstream.headers.get("x-zero-data-retention")
+    await upstream.aclose()
+    headers = {"X-Gateway-Account": acct.id}
+    if zdr is not None:
+        headers["X-Upstream-Zero-Data-Retention"] = zdr
+    if status_code >= 400:
+        if use_dedup:
+            await dedup.release(idem_key)
+        return Response(content=content, status_code=status_code, media_type=media_type, headers=headers)
+    if use_dedup:
+        await dedup.complete(idem_key, status_code, content, acct.id)
+    return Response(content=content, status_code=status_code, media_type=media_type, headers=headers)
 
 
 async def _serve_opencode_go_messages(s, body: dict) -> Response:

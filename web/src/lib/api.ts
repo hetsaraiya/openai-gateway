@@ -16,7 +16,9 @@ export type Model = {
   max_context_window?: number
   supported_endpoints?: string[]
   input_modalities?: string[]
+  output_modalities?: string[]
   supported_in_api?: boolean
+  prompt_caching?: boolean
 }
 
 export type Provider = {
@@ -106,6 +108,21 @@ export function addOpenCodeKey(
   )
 }
 
+export function addXAIKey(
+  payload: { api_key: string; identifier?: string; label?: string },
+  key: string,
+) {
+  return request<{ status: "ok"; id: string; label?: string; replaced: boolean; provider: "xai" }>(
+    "/v1/admin/xai/keys",
+    key,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+  )
+}
+
 export function fetchLogin(loginId: string, key: string) {
   return request<Login>(`/admin/logins/${encodeURIComponent(loginId)}`, key)
 }
@@ -127,12 +144,16 @@ export function testAccount(accountId: string, key: string) {
 }
 
 export function providerFor(model: Model) {
-  return model.gateway ?? (model.id.startsWith("opencode-go/") ? "opencode-go" : "codex")
+  if (model.gateway) return model.gateway
+  if (model.id.startsWith("opencode-go/")) return "opencode-go"
+  if (model.id.startsWith("xai/")) return "xai"
+  return "codex"
 }
 
 export function providerLabel(provider: string) {
   if (provider === "codex") return "OpenAI"
   if (provider === "opencode-go") return "OpenCode Go"
+  if (provider === "xai") return "xAI"
   return provider
     .split(/[-_]/)
     .filter(Boolean)

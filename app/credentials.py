@@ -195,6 +195,46 @@ class OpenCodeGoAccount:
         return None
 
 
+class XAIAccount:
+    """xAI inference account backed by an API key."""
+
+    provider = "xai"
+    daily_limit: Optional[int] = None
+
+    def __init__(self, path: Optional[Path], data: dict, settings: Settings, acct_id: str = ""):
+        self.path = path
+        self.id = acct_id or (path.stem if path else "xai")
+        self._settings = settings
+        self._data = data
+        api_key = str(data.get("api_key") or data.get("XAI_API_KEY") or "").strip()
+        if not valid_api_key(api_key):
+            label = path.name if path else self.id
+            raise CredentialError(f"{label}: missing or invalid api_key")
+        self._api_key = api_key
+
+    @property
+    def access_token(self) -> str:
+        return self._api_key
+
+    @property
+    def account_id(self) -> Optional[str]:
+        return None
+
+    @property
+    def plan(self) -> str:
+        return "xai-api"
+
+    def masked_token(self) -> str:
+        tok = self.access_token
+        return f"{tok[:6]}…{tok[-4:]}" if len(tok) > 12 else "****"
+
+    def expires_at(self) -> Optional[int]:
+        return None
+
+    async def ensure_fresh(self, client: httpx.AsyncClient, force: bool = False) -> None:
+        return None
+
+
 _ACCOUNT_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 _CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
 
@@ -216,7 +256,14 @@ def _is_opencode_go(data: dict) -> bool:
     return provider == "opencode-go" or "api_key" in data or "OPENCODE_GO_API_KEY" in data
 
 
+def _is_xai(data: dict) -> bool:
+    provider = str(data.get("provider") or data.get("type") or "").lower().replace("_", "-")
+    return provider == "xai" or "XAI_API_KEY" in data
+
+
 def _account_from_data(path: Path, data: dict, settings: Settings):
+    if _is_xai(data):
+        return XAIAccount(path, data, settings)
     if _is_opencode_go(data):
         return OpenCodeGoAccount(path, data, settings)
     return CodexAccount(path, data, settings)
@@ -228,6 +275,17 @@ def _env_opencode_go_accounts(settings: Settings) -> list[OpenCodeGoAccount]:
         acct_id = f"opencode-go-env-{idx}"
         try:
             accounts.append(OpenCodeGoAccount(None, {"api_key": api_key}, settings, acct_id=acct_id))
+        except CredentialError as exc:
+            log.error("skipping %s: %s", acct_id, exc)
+    return accounts
+
+
+def _env_xai_accounts(settings: Settings) -> list[XAIAccount]:
+    accounts: list[XAIAccount] = []
+    for idx, api_key in enumerate(filter(None, (key.strip() for key in settings.xai_api_keys.split(","))), 1):
+        acct_id = f"xai-env-{idx}"
+        try:
+            accounts.append(XAIAccount(None, {"type": "xai", "api_key": api_key}, settings, acct_id=acct_id))
         except CredentialError as exc:
             log.error("skipping %s: %s", acct_id, exc)
     return accounts
@@ -245,6 +303,7 @@ def load_accounts(settings: Settings) -> list:
         except (json.JSONDecodeError, CredentialError) as exc:
             log.error("skipping %s: %s", path.name, exc)
     accounts.extend(_env_opencode_go_accounts(settings))
+    accounts.extend(_env_xai_accounts(settings))
 
     if not accounts:
         # Allowed: the gateway can boot empty and have accounts uploaded via the

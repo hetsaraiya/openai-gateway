@@ -1,7 +1,7 @@
 <div align="center">
   <img src="./assets/openai-gateway-logo.svg" alt="OpenAI Gateway logo" width="680">
 
-  **One OpenAI-compatible endpoint for multiple Codex and OpenCode Go subscriptions.**
+  **One OpenAI-compatible endpoint for Codex, OpenCode Go, and xAI.**
 
   [Portfolio](https://hetsaraiya.com/projects/openai-gateway) ·
   [Spores](https://github.com/hetsaraiya/spores)
@@ -17,7 +17,8 @@ translates Chat Completions requests to the upstream Responses protocol.
 The gateway was originally built for
 [Spores](https://github.com/hetsaraiya/spores), where disposable coding
 sandboxes need one stable endpoint without receiving every upstream credential.
-It now also supports optional OpenCode Go subscription keys.
+It now also supports optional OpenCode Go subscription keys and xAI inference
+API keys.
 
 > Use only accounts, subscriptions, and workloads that you are authorized to
 > operate. Upstream APIs and account terms may change independently of this
@@ -34,6 +35,7 @@ flowchart LR
     Router -->|"fallback / round robin / quota aware"| Accounts["Healthy account pool"]
     Accounts --> Codex["Codex backend"]
     Accounts --> OpenCode["OpenCode Go"]
+    Accounts --> XAI["xAI"]
     API --> Dashboard["Authenticated dashboard"]
 ```
 
@@ -41,6 +43,8 @@ flowchart LR
 
 - OpenAI-compatible `chat/completions`, `responses`, and model-list endpoints.
 - Anthropic-compatible `messages` requests for supported OpenCode Go models.
+- xAI Chat Completions and Responses with live language-model discovery.
+- xAI automatic prompt caching with conversation-key forwarding.
 - Multiple Codex accounts loaded from individual credential files.
 - Automatic OAuth refresh with refreshed credentials persisted to disk.
 - `fallback`, `round_robin`, and `quota_aware` routing strategies.
@@ -141,7 +145,25 @@ print(response.choices[0].message.content)
 
 Query `GET /v1/models` to use model IDs actually available to the configured
 accounts. OpenCode Go models use the `opencode-go/<model-id>` prefix at the
-gateway boundary.
+gateway boundary; xAI models use `xai/<model-id>`.
+
+### xAI prompt caching
+
+xAI performs prompt caching automatically for matching prompt prefixes. For
+reliable cache affinity, send a stable `x-grok-conv-id` header with Chat
+Completions requests:
+
+```bash
+curl http://localhost:8000/v1/chat/completions \
+  -H "Authorization: Bearer $GATEWAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -H "x-grok-conv-id: conversation-123" \
+  -d '{"model":"xai/grok-4.5","messages":[{"role":"user","content":"Hello"}]}'
+```
+
+For `/v1/responses`, include `"prompt_cache_key": "conversation-123"` in the
+request body. The gateway preserves xAI's cached-token usage fields. xAI
+inference authenticates with API keys; it does not provide an OAuth flow.
 
 ## Configuration
 
@@ -158,6 +180,8 @@ gateway boundary.
 | `DEDUP_ENABLED` | `true` | Enable idempotency-key deduplication |
 | `DEDUP_TTL` | `600` | Deduplicated response lifetime in seconds |
 | `OPENCODE_GO_API_KEYS` | empty | Optional comma-separated subscription keys |
+| `XAI_API_KEYS` | empty | Optional comma-separated xAI inference API keys |
+| `XAI_BASE_URL` | `https://api.x.ai/v1` | xAI inference API base URL |
 
 See [`.env.example`](./.env.example) for upstream URLs, OAuth behavior, catalog
 caching, and every optional setting.

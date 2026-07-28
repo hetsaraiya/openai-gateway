@@ -29,6 +29,8 @@ class Settings:
     # gateway uses OpenAI-compatible chat completions or Anthropic Messages.
     opencode_go_base_url: str = "https://opencode.ai/zen/go/v1"
     opencode_go_api_keys: str = ""
+    xai_base_url: str = "https://api.x.ai/v1"
+    xai_api_keys: str = ""
     # Where access tokens are refreshed.
     oauth_token_url: str = "https://auth.openai.com/oauth/token"
     oauth_client_id: str = DEFAULT_CODEX_CLIENT_ID
@@ -78,6 +80,8 @@ def get_settings() -> Settings:
             "OPENCODE_GO_BASE_URL", default="https://opencode.ai/zen/go/v1"
         ).rstrip("/"),
         opencode_go_api_keys=config("OPENCODE_GO_API_KEYS", default=""),
+        xai_base_url=config("XAI_BASE_URL", default="https://api.x.ai/v1").rstrip("/"),
+        xai_api_keys=config("XAI_API_KEYS", default=""),
         oauth_token_url=config(
             "OAUTH_TOKEN_URL", default="https://auth.openai.com/oauth/token"
         ),

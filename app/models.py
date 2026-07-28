@@ -48,6 +48,21 @@ class OpenCodeGoKeyCreate(BaseModel):
     )
 
 
+class XAIKeyCreate(BaseModel):
+    """An xAI inference API key to add to the account pool."""
+
+    api_key: str = Field(description="xAI inference API key.")
+    identifier: Optional[str] = Field(
+        default=None,
+        description="Optional stable, filename-safe identifier for this key.",
+    )
+    label: Optional[str] = Field(
+        default=None,
+        max_length=128,
+        description="Optional human-readable label stored with this key.",
+    )
+
+
 class AccountStatus(BaseModel):
     id: str
     provider: str = "codex"

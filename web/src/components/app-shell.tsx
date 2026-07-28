@@ -11,6 +11,7 @@ import {
   RefreshCw,
   Server,
   ShieldCheck,
+  Zap,
   X,
 } from "lucide-react"
 import { useEffect, useState } from "react"
@@ -134,7 +135,7 @@ export function Sidebar({
                 const providerAccounts = accounts.filter((account) => account.provider === provider.id)
                 const isExpanded = expanded[provider.id] ?? true
                 const isSelected = selectedProvider === provider.id && activeView === "overview"
-                const canAddAccount = provider.id === "codex" || provider.id === "opencode-go"
+                const canAddAccount = provider.id === "codex" || provider.id === "opencode-go" || provider.id === "xai"
                 return (
                   <section
                     key={provider.id}
@@ -227,7 +228,7 @@ export function Sidebar({
 }
 
 function ProviderIcon({ provider }: { provider: string }) {
-  const Icon = provider === "codex" ? Cloud : provider === "opencode-go" ? CircleGauge : Server
+  const Icon = provider === "codex" ? Cloud : provider === "opencode-go" ? CircleGauge : provider === "xai" ? Zap : Server
   return (
     <span className="grid size-8 shrink-0 place-items-center rounded-lg border border-line bg-surface text-accent-text shadow-panel">
       <Icon size={15} aria-hidden="true" />

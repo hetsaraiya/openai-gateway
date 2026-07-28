@@ -25,6 +25,8 @@ def make_settings(strategy="fallback", **kw) -> Settings:
         codex_base_url=kw.get("codex_base_url", "https://codex.test/backend"),
         opencode_go_base_url=kw.get("opencode_go_base_url", "https://go.test/v1"),
         opencode_go_api_keys=kw.get("opencode_go_api_keys", ""),
+        xai_base_url=kw.get("xai_base_url", "https://xai.test/v1"),
+        xai_api_keys=kw.get("xai_api_keys", ""),
         codex_client_version=kw.get("codex_client_version", "0.139.0"),
         models_cache_ttl=kw.get("models_cache_ttl", 3600),
     )

@@ -26,6 +26,7 @@ from .proxy import (
     OPENCODE_GO_MODEL_PREFIX,
     build_codex_headers,
     build_opencode_go_headers,
+    build_xai_headers,
 )
 from .router import AccountRouter, NoAccountAvailable
 
@@ -46,6 +47,9 @@ class ModelCatalog:
         self._lock = asyncio.Lock()
         self._raw: list[dict] = []          # raw ModelInfo objects from the backend
         self._opencode_go_raw: list[dict] = []
+        self._xai_raw: list[dict] = []
+        self._xai_fetched_at: float = 0.0
+        self._xai_lock = asyncio.Lock()
         self._etag: Optional[str] = None
         self._fetched_at: float = 0.0
 
@@ -138,21 +142,30 @@ class ModelCatalog:
             data.extend(self._to_openai(m) for m in self._visible())
         except ModelCatalogError as exc:
             codex_error = exc
-        data.extend(await self._opencode_go_models())
+        opencode_models, xai_models = await asyncio.gather(
+            self._opencode_go_models(),
+            self._xai_models(),
+        )
+        data.extend(opencode_models)
+        data.extend(xai_models)
         if not data and codex_error:
             raise codex_error
         return {"object": "list", "data": data}
 
     async def default_model(self) -> Optional[str]:
         """Highest-priority listable model slug, used when a request omits one."""
-        await self._ensure()
-        visible = self._visible()
-        if not visible:
-            return None
-        # Lower `priority` sorts first (it's an ordering weight); fall back to
-        # input order for ties / missing values.
-        visible.sort(key=lambda m: m.get("priority", 1_000_000))
-        return visible[0].get("slug")
+        try:
+            await self._ensure()
+            visible = self._visible()
+        except ModelCatalogError:
+            visible = []
+        if visible:
+            # Lower `priority` sorts first (it's an ordering weight); fall back
+            # to input order for ties / missing values.
+            visible.sort(key=lambda m: m.get("priority", 1_000_000))
+            return visible[0].get("slug")
+        provider_models = await asyncio.gather(self._opencode_go_models(), self._xai_models())
+        return next((model["id"] for models in provider_models for model in models), None)
 
     async def _opencode_go_models(self) -> list[dict]:
         try:
@@ -206,4 +219,66 @@ class ModelCatalog:
             "supported_in_api": True,
             "gateway": "opencode-go",
             "supported_endpoints": [endpoint],
+        }
+
+    async def _xai_models(self) -> list[dict]:
+        if self._xai_raw and (time.time() - self._xai_fetched_at) < self._settings.models_cache_ttl:
+            return [self._xai_to_openai(model) for model in self._xai_raw]
+        async with self._xai_lock:
+            if self._xai_raw and (time.time() - self._xai_fetched_at) < self._settings.models_cache_ttl:
+                return [self._xai_to_openai(model) for model in self._xai_raw]
+            return await self._fetch_xai_models()
+
+    async def _fetch_xai_models(self) -> list[dict]:
+        try:
+            candidates = await self._router.candidates("xai")
+        except NoAccountAvailable:
+            return []
+
+        last_error = ""
+        for acct in candidates:
+            try:
+                response = await self._client.get(
+                    f"{self._settings.xai_base_url}/language-models",
+                    headers=build_xai_headers(acct, stream=False),
+                    timeout=30.0,
+                )
+            except httpx.HTTPError as exc:
+                last_error = f"{acct.id}: {exc}"
+                continue
+
+            if response.status_code == 200:
+                models = (response.json() or {}).get("models") or []
+                self._xai_raw = [model for model in models if isinstance(model, dict) and model.get("id")]
+                self._xai_fetched_at = time.time()
+                return [self._xai_to_openai(model) for model in self._xai_raw]
+            if response.status_code in _RETRYABLE:
+                last_error = f"{acct.id}: HTTP {response.status_code}"
+                continue
+            last_error = f"{acct.id}: HTTP {response.status_code} {response.text[:200]}"
+
+        if self._xai_raw:
+            log.warning("xAI model refresh failed (%s); serving stale cache", last_error)
+            return [self._xai_to_openai(model) for model in self._xai_raw]
+        log.warning("xAI models unavailable (%s)", last_error or "no attempts")
+        return []
+
+    @staticmethod
+    def _xai_to_openai(model: dict) -> dict:
+        model_id = str(model["id"])
+        return {
+            "id": f"xai/{model_id}",
+            "object": "model",
+            "created": model.get("created", 0),
+            "owned_by": model.get("owned_by") or "xai",
+            "display_name": model.get("name") or model_id,
+            "description": model.get("description"),
+            "context_window": model.get("context_length"),
+            "input_modalities": model.get("input_modalities"),
+            "output_modalities": model.get("output_modalities"),
+            "gateway": "xai",
+            "supported_in_api": True,
+            "supported_endpoints": ["/v1/chat/completions", "/v1/responses"],
+            "prompt_caching": True,
+            "cached_prompt_text_token_price": model.get("cached_prompt_text_token_price"),
         }
