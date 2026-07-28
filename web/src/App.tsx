@@ -30,6 +30,7 @@ export default function App() {
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null)
   const [now, setNow] = useState(() => new Date())
   const [activeView, setActiveView] = useState<View>(viewFromHash)
+  const [selectedProvider, setSelectedProvider] = useState<string | null>(null)
   const [mobileOpen, setMobileOpen] = useState(false)
   const [login, setLogin] = useState<Login | null>(null)
 
@@ -141,6 +142,11 @@ export default function App() {
     selectView("accounts")
   }
 
+  function handleAccountAdded(accountId: string) {
+    push(`${accountId} added.`, "success")
+    void loadDashboard(gatewayKey, { silent: true })
+  }
+
   async function handleDeleteAccount(accountId: string) {
     await deleteAccount(accountId, gatewayKey)
     await loadDashboard(gatewayKey, { silent: true })
@@ -162,14 +168,24 @@ export default function App() {
   return (
     <div className="min-h-dvh">
       <Sidebar
+        data={data}
+        gatewayKey={gatewayKey}
         activeView={activeView}
+        selectedProvider={selectedProvider}
         onSelect={selectView}
+        onSelectProvider={(provider) => {
+          setSelectedProvider(provider)
+          selectView("overview")
+        }}
+        onLoginStarted={handleLoginStarted}
+        onAccountAdded={handleAccountAdded}
+        onDelete={handleDeleteAccount}
         mobileOpen={mobileOpen}
         onCloseMobile={() => setMobileOpen(false)}
         onLock={() => endSession()}
       />
 
-      <div className="lg:pl-64">
+      <div className="lg:pl-80">
         <TopBar
           activeView={activeView}
           loading={loading}
@@ -189,7 +205,13 @@ export default function App() {
             )}
 
             {activeView === "overview" ? (
-              <Overview data={data} loading={loading} onAddAccount={() => selectView("accounts")} />
+              <Overview
+                data={data}
+                loading={loading}
+                selectedProvider={selectedProvider}
+                onSelectProvider={setSelectedProvider}
+                onAddAccount={() => selectView("accounts")}
+              />
             ) : (
               <Accounts
                 data={data}
@@ -197,6 +219,7 @@ export default function App() {
                 gatewayKey={gatewayKey}
                 login={login}
                 onLoginStarted={handleLoginStarted}
+                onAccountAdded={handleAccountAdded}
                 onCopy={copyCode}
                 onDelete={handleDeleteAccount}
               />

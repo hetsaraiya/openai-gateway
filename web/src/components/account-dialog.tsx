@@ -1,34 +1,45 @@
-import { ArrowUpRight, LoaderCircle, Plus } from "lucide-react"
-import { useState } from "react"
+import { ArrowUpRight, KeyRound, LoaderCircle, Plus } from "lucide-react"
+import { type ReactNode, useState } from "react"
 
-import { ApiError, startDeviceLogin, type Login } from "../lib/api"
+import { addOpenCodeKey, ApiError, providerLabel, startDeviceLogin, type Login } from "../lib/api"
 import { Button } from "./ui/button"
 import { Dialog, DialogContent, DialogHeader, DialogTrigger } from "./ui/dialog"
 import { Field, Input } from "./ui/input"
 
-const VALID_ID = /^[A-Za-z0-9_-]+$/
+const VALID_ID = /^[A-Za-z0-9._-]+$/
 
 export function AccountDialog({
   gatewayKey,
   disabled,
+  provider = "codex",
+  trigger,
   onLoginStarted,
+  onAccountAdded,
 }: {
   gatewayKey: string
   disabled: boolean
+  provider?: string
+  trigger?: ReactNode
   onLoginStarted: (login: Login) => void
+  onAccountAdded?: (accountId: string) => void
 }) {
   const [open, setOpen] = useState(false)
   const [account, setAccount] = useState("")
+  const [label, setLabel] = useState("")
+  const [apiKey, setApiKey] = useState("")
   const [error, setError] = useState("")
   const [busy, setBusy] = useState(false)
 
   const trimmed = account.trim()
+  const isOpenCode = provider === "opencode-go"
   const invalid = trimmed.length > 0 && !VALID_ID.test(trimmed)
 
   function reset(next: boolean) {
     setOpen(next)
     if (!next) {
       setAccount("")
+      setLabel("")
+      setApiKey("")
       setError("")
       setBusy(false)
     }
@@ -40,7 +51,19 @@ export function AccountDialog({
     setError("")
     setBusy(true)
     try {
-      onLoginStarted(await startDeviceLogin(trimmed, gatewayKey))
+      if (isOpenCode) {
+        const result = await addOpenCodeKey(
+          {
+            api_key: apiKey.trim(),
+            ...(trimmed ? { identifier: trimmed } : {}),
+            ...(label.trim() ? { label: label.trim() } : {}),
+          },
+          gatewayKey,
+        )
+        onAccountAdded?.(result.id)
+      } else {
+        onLoginStarted(await startDeviceLogin(trimmed, gatewayKey))
+      }
       reset(false)
     } catch (cause) {
       setError((cause as ApiError).message)
@@ -51,22 +74,52 @@ export function AccountDialog({
   return (
     <Dialog open={open} onOpenChange={reset}>
       <DialogTrigger asChild>
-        <Button disabled={disabled}>
-          <Plus size={16} aria-hidden="true" />
-          Connect account
-        </Button>
+        {trigger ?? (
+          <Button disabled={disabled}>
+            <Plus size={16} aria-hidden="true" />
+            Add account
+          </Button>
+        )}
       </DialogTrigger>
       <DialogContent>
         <DialogHeader
-          title="Connect a ChatGPT account"
-          description="Name the account, then finish the OpenAI device sign-in in your browser."
+          title={`Add ${providerLabel(provider)} account`}
+          description={
+            isOpenCode
+              ? "Add a subscription API key. It is encrypted and stored by the gateway."
+              : "Name the account, then finish the secure OpenAI device sign-in in your browser."
+          }
         />
-        <form className="mt-6" onSubmit={submit} noValidate>
+        <form className="mt-6 space-y-4" onSubmit={submit} noValidate>
+          {isOpenCode && (
+            <Field
+              label="Subscription API key"
+              htmlFor="provider-api-key"
+              hint="The key is sent directly to your gateway and is never saved in this browser."
+            >
+              <Input
+                id="provider-api-key"
+                name="provider-api-key"
+                type="password"
+                value={apiKey}
+                onChange={(event) => setApiKey(event.target.value)}
+                placeholder="Enter API key"
+                autoComplete="off"
+                spellCheck={false}
+                autoFocus
+              />
+            </Field>
+          )}
+
           <Field
             label="Account identifier"
             htmlFor="account-id"
-            hint="Letters, numbers, hyphens, and underscores. Used only inside the gateway."
-            error={error || (invalid ? "Use only letters, numbers, hyphens, and underscores." : "")}
+            hint={
+              isOpenCode
+                ? "Optional. Leave blank to generate a unique identifier."
+                : "Letters, numbers, periods, hyphens, and underscores."
+            }
+            error={error || (invalid ? "Use only letters, numbers, periods, hyphens, and underscores." : "")}
           >
             <Input
               id="account-id"
@@ -76,19 +129,38 @@ export function AccountDialog({
               placeholder="engineering-team"
               autoComplete="off"
               spellCheck={false}
-              autoFocus
+              autoFocus={!isOpenCode}
               aria-describedby="account-id-hint"
               aria-invalid={invalid || Boolean(error) ? true : undefined}
             />
           </Field>
 
-          <div className="mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+          {isOpenCode && (
+            <Field label="Display label" htmlFor="account-label" hint="Optional. Helps your team recognize this key.">
+              <Input
+                id="account-label"
+                name="account-label"
+                value={label}
+                onChange={(event) => setLabel(event.target.value)}
+                placeholder="Production subscription"
+                autoComplete="off"
+              />
+            </Field>
+          )}
+
+          <div className="flex flex-col-reverse gap-2 pt-2 sm:flex-row sm:justify-end">
             <Button variant="ghost" onClick={() => reset(false)}>
               Cancel
             </Button>
-            <Button type="submit" disabled={!trimmed || invalid || busy}>
-              {busy ? <LoaderCircle size={16} className="animate-spin" aria-hidden="true" /> : <ArrowUpRight size={16} aria-hidden="true" />}
-              {busy ? "Starting…" : "Continue to OpenAI"}
+            <Button type="submit" disabled={invalid || busy || (isOpenCode ? !apiKey.trim() : !trimmed)}>
+              {busy ? (
+                <LoaderCircle size={16} className="animate-spin" aria-hidden="true" />
+              ) : isOpenCode ? (
+                <KeyRound size={16} aria-hidden="true" />
+              ) : (
+                <ArrowUpRight size={16} aria-hidden="true" />
+              )}
+              {busy ? "Adding…" : isOpenCode ? "Add API key" : "Continue to OpenAI"}
             </Button>
           </div>
         </form>

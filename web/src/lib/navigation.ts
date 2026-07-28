@@ -3,7 +3,7 @@ import { KeyRound, LayoutDashboard, type LucideIcon } from "lucide-react"
 export type View = "overview" | "accounts"
 
 export const NAVIGATION: { id: View; label: string; icon: LucideIcon }[] = [
-  { id: "overview", label: "Overview", icon: LayoutDashboard },
+  { id: "overview", label: "Model catalog", icon: LayoutDashboard },
   { id: "accounts", label: "Accounts", icon: KeyRound },
 ]
 

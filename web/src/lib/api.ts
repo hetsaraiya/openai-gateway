@@ -9,9 +9,14 @@ export type Gateway = {
 export type Model = {
   id: string
   gateway?: string
+  owned_by?: string
+  display_name?: string
+  description?: string
   context_window?: number
   max_context_window?: number
   supported_endpoints?: string[]
+  input_modalities?: string[]
+  supported_in_api?: boolean
 }
 
 export type Provider = {
@@ -86,6 +91,21 @@ export function startDeviceLogin(accountId: string, key: string) {
   return request<Login>(`/admin/accounts/${encodeURIComponent(accountId)}/login/device`, key, { method: "POST" })
 }
 
+export function addOpenCodeKey(
+  payload: { api_key: string; identifier?: string; label?: string },
+  key: string,
+) {
+  return request<{ status: "ok"; id: string; label?: string; replaced: boolean; provider: "opencode-go" }>(
+    "/v1/admin/opencode-go/keys",
+    key,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+  )
+}
+
 export function fetchLogin(loginId: string, key: string) {
   return request<Login>(`/admin/logins/${encodeURIComponent(loginId)}`, key)
 }
@@ -100,6 +120,16 @@ export function deleteAccount(accountId: string, key: string) {
 
 export function providerFor(model: Model) {
   return model.gateway ?? (model.id.startsWith("opencode-go/") ? "opencode-go" : "codex")
+}
+
+export function providerLabel(provider: string) {
+  if (provider === "codex") return "OpenAI"
+  if (provider === "opencode-go") return "OpenCode Go"
+  return provider
+    .split(/[-_]/)
+    .filter(Boolean)
+    .map((part) => part[0]?.toUpperCase() + part.slice(1))
+    .join(" ")
 }
 
 export function contextWindow(model: Model) {

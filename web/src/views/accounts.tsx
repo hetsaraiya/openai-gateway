@@ -1,4 +1,4 @@
-import { KeyRound } from "lucide-react"
+import { Cloud, KeyRound, Plus } from "lucide-react"
 
 import { AccountDialog } from "../components/account-dialog"
 import { DeleteAccountDialog } from "../components/delete-account-dialog"
@@ -15,6 +15,7 @@ export function Accounts({
   gatewayKey,
   login,
   onLoginStarted,
+  onAccountAdded,
   onCopy,
   onDelete,
 }: {
@@ -23,6 +24,7 @@ export function Accounts({
   gatewayKey: string
   login: Login | null
   onLoginStarted: (login: Login) => void
+  onAccountAdded: (accountId: string) => void
   onCopy: (value: string) => void
   onDelete: (accountId: string) => Promise<void>
 }) {
@@ -36,8 +38,37 @@ export function Accounts({
       <PageHeader
         eyebrow="Identity & access"
         title="Accounts"
-        description="Connect ChatGPT accounts through the OpenAI device flow. Refreshed credentials are stored by the gateway, never by this page."
-        actions={<AccountDialog gatewayKey={gatewayKey} disabled={!gatewayKey.trim()} onLoginStarted={onLoginStarted} />}
+        description="Manage OpenAI device sessions and provider API keys in one place. Credentials are stored by the gateway, never by this page."
+        actions={
+          <div className="flex flex-wrap gap-2">
+            <AccountDialog
+              gatewayKey={gatewayKey}
+              disabled={!gatewayKey.trim()}
+              provider="codex"
+              trigger={
+                <button className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-accent px-4 text-sm font-medium text-accent-fg shadow-panel transition-colors hover:bg-accent-hover">
+                  <Plus size={16} aria-hidden="true" />
+                  OpenAI account
+                </button>
+              }
+              onLoginStarted={onLoginStarted}
+              onAccountAdded={onAccountAdded}
+            />
+            <AccountDialog
+              gatewayKey={gatewayKey}
+              disabled={!gatewayKey.trim()}
+              provider="opencode-go"
+              trigger={
+                <button className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-line bg-surface px-4 text-sm font-medium text-ink shadow-panel transition-colors hover:border-line-strong hover:bg-elevated">
+                  <Cloud size={16} aria-hidden="true" />
+                  OpenCode Go key
+                </button>
+              }
+              onLoginStarted={onLoginStarted}
+              onAccountAdded={onAccountAdded}
+            />
+          </div>
+        }
       />
 
       {login && <DeviceLogin login={login} onCopy={onCopy} />}
@@ -67,7 +98,7 @@ export function Accounts({
           <PanelEmpty
             icon={<KeyRound size={18} aria-hidden="true" />}
             title="No accounts connected yet"
-            hint="Use “Connect account” above to start a secure OpenAI device sign-in."
+            hint="Add an OpenAI account or OpenCode Go key to start routing requests."
           />
         )}
       </Panel>
