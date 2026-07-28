@@ -35,6 +35,13 @@ from .credentials import (
     save_account_file,
     valid_account_id,
 )
+from .cursor_cli import (
+    CursorLoginManager,
+    cursor_prompt_from_chat,
+    cursor_prompt_from_responses,
+    cursor_status,
+    start_cursor_run,
+)
 from .dedup import DedupStore, DuplicateInFlight
 from .device_login import DeviceLoginManager
 from .model_catalog import ModelCatalog, ModelCatalogError
@@ -45,7 +52,6 @@ from .models import (
     OpenCodeGoKeyCreate,
     ResponsesRequest,
     StatusResponse,
-    XAIKeyCreate,
 )
 from .observability import configure_logging, log_access, new_request_id, request_id_var
 from .proxy import (
@@ -77,6 +83,7 @@ from .translate import (
     responses_sse_to_chat_sse,
     responses_to_chat,
 )
+from .xai_login import XAILoginManager
 
 log = logging.getLogger("gateway")
 WEB_DIR = Path(__file__).parent / "static"
@@ -97,6 +104,8 @@ async def lifespan(app: FastAPI):
     xai_proxy = XAIProxy(settings, router, client)
     catalog = ModelCatalog(settings, router, client)
     device_logins = DeviceLoginManager(settings, router)
+    xai_logins = XAILoginManager(settings, router, client)
+    cursor_logins = CursorLoginManager(settings, router)
 
     app.state.settings = settings
     app.state.router = router
@@ -107,6 +116,8 @@ async def lifespan(app: FastAPI):
     app.state.xai_proxy = xai_proxy
     app.state.catalog = catalog
     app.state.device_logins = device_logins
+    app.state.xai_logins = xai_logins
+    app.state.cursor_logins = cursor_logins
     app.state.client = client
 
     redis_ok = await quota.ping()
@@ -118,6 +129,8 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         await device_logins.close()
+        await xai_logins.close()
+        await cursor_logins.close()
         await client.aclose()
         await quota.close()
         await dedup.close()
@@ -212,6 +225,7 @@ def _dashboard_html() -> str:
       if (model.gateway) return model.gateway;
       if ((model.id || "").startsWith("opencode-go/")) return "opencode-go";
       if ((model.id || "").startsWith("xai/")) return "xai";
+      if ((model.id || "").startsWith("cursor/")) return "cursor";
       return "codex";
     }
     function stat(label, value) { return `<div class="stat"><div class="label">${label}</div><div class="value">${cell(value)}</div></div>`; }
@@ -360,10 +374,13 @@ async def test_account(account_id: str, request: Request) -> Response:
             )
         elif provider == "xai":
             response = await s.client.get(
-                f"{s.settings.xai_base_url}/language-models",
-                headers=build_xai_headers(account, stream=False),
+                f"{s.settings.xai_base_url}/models",
+                headers=build_xai_headers(s.settings, account, stream=False),
                 timeout=30.0,
             )
+        elif provider == "cursor":
+            await cursor_status(s.settings, account.home)
+            response = httpx.Response(200, json={"status": "ok"})
         else:
             response = await s.client.get(
                 f"{s.settings.codex_base_url}/models",
@@ -371,7 +388,7 @@ async def test_account(account_id: str, request: Request) -> Response:
                 headers=build_codex_headers(s.settings, account, stream=False),
                 timeout=30.0,
             )
-    except (CredentialError, httpx.HTTPError) as exc:
+    except (CredentialError, httpx.HTTPError, OSError, RuntimeError) as exc:
         log.warning("account test failed for %s: %s", account_id, exc)
         return _error(502, f"{provider} could not be reached with this account",
                       "account_test_failed")
@@ -405,7 +422,47 @@ async def start_device_login(account_id: str, request: Request) -> Response:
         return _error(502, login.error or "could not start device login", "login_start_failed")
     return JSONResponse(status_code=201, content={
         "id": login.id, "account_id": account_id, "status": login.status,
-        "verification_url": login.verification_url, "user_code": login.user_code,
+        "provider": "codex", "verification_url": login.verification_url,
+        "user_code": login.user_code,
+    })
+
+
+@app.post(
+    "/admin/providers/xai/accounts/{account_id}/login/device",
+    dependencies=[Depends(require_master_key)],
+)
+async def start_xai_device_login(account_id: str, request: Request) -> Response:
+    if not valid_account_id(account_id):
+        return _error(400, "invalid account id", "invalid_account_id", "invalid_request_error")
+    try:
+        login = await request.app.state.xai_logins.start(account_id)
+    except (httpx.HTTPError, RuntimeError, ValueError, KeyError) as exc:
+        log.warning("could not start xAI device login: %s", exc)
+        return _error(502, str(exc), "login_start_failed")
+    return JSONResponse(status_code=201, content={
+        "id": login.id, "account_id": account_id, "status": login.status,
+        "provider": login.provider, "verification_url": login.verification_url,
+        "user_code": login.user_code,
+    })
+
+
+@app.post(
+    "/admin/providers/cursor/accounts/{account_id}/login/device",
+    dependencies=[Depends(require_master_key)],
+)
+async def start_cursor_login(account_id: str, request: Request) -> Response:
+    if not valid_account_id(account_id):
+        return _error(400, "invalid account id", "invalid_account_id", "invalid_request_error")
+    try:
+        login = await request.app.state.cursor_logins.start(account_id)
+    except FileNotFoundError:
+        return _error(503, "Cursor Agent CLI is not installed", "cursor_unavailable")
+    if login.status == "failed":
+        return _error(502, login.error or "could not start Cursor login", "login_start_failed")
+    return JSONResponse(status_code=201, content={
+        "id": login.id, "account_id": account_id, "status": login.status,
+        "provider": login.provider, "verification_url": login.verification_url,
+        "user_code": None,
     })
 
 
@@ -413,8 +470,13 @@ async def start_device_login(account_id: str, request: Request) -> Response:
 async def device_login_status(login_id: str, request: Request) -> Response:
     login = request.app.state.device_logins.get(login_id)
     if not login:
+        login = request.app.state.xai_logins.get(login_id)
+    if not login:
+        login = request.app.state.cursor_logins.get(login_id)
+    if not login:
         return _error(404, "login not found", "login_not_found")
     return JSONResponse({"id": login.id, "account_id": login.account_id, "status": login.status,
+                         "provider": login.provider,
                          "verification_url": login.verification_url, "user_code": login.user_code,
                          "error": login.error})
 
@@ -449,34 +511,6 @@ async def add_opencode_go_key(payload: OpenCodeGoKeyCreate, request: Request) ->
         "label": payload.label,
         "replaced": replaced,
         "provider": "opencode-go",
-    })
-
-
-@app.post("/v1/admin/xai/keys", dependencies=[Depends(require_master_key)])
-async def add_xai_key(payload: XAIKeyCreate, request: Request) -> Response:
-    """Persist and hot-load an xAI inference API key."""
-    s = request.app.state
-    account_id = payload.identifier or f"xai-{uuid4().hex}"
-    if not valid_account_id(account_id):
-        return _error(400, "invalid identifier: use letters, digits, '.', '_', '-'",
-                      "invalid_account_id", "invalid_request_error")
-
-    data = {"type": "xai", "api_key": payload.api_key}
-    if payload.label:
-        data["label"] = payload.label
-    try:
-        account = save_account_file(s.settings, account_id, data)
-    except CredentialError as exc:
-        return _error(400, str(exc), "invalid_api_key", "invalid_request_error")
-
-    replaced = s.router.add_account(account)
-    log.info("xAI key %s %s via API", account_id, "replaced" if replaced else "added")
-    return JSONResponse(status_code=200 if replaced else 201, content={
-        "status": "ok",
-        "id": account_id,
-        "label": payload.label,
-        "replaced": replaced,
-        "provider": "xai",
     })
 
 
@@ -548,15 +582,22 @@ def _dashboard_model(model: dict[str, Any]) -> dict[str, Any]:
     model_id = str(row.get("id") or "")
     provider = row.get("gateway")
     if not provider:
-        provider = "opencode-go" if is_opencode_go_model(model_id) else "xai" if is_xai_model(model_id) else "codex"
+        provider = (
+            "opencode-go" if is_opencode_go_model(model_id)
+            else "xai" if is_xai_model(model_id)
+            else "cursor" if model_id.startswith("cursor/")
+            else "codex"
+        )
     row["gateway"] = provider
     endpoints = row.get("supported_endpoints")
     if not isinstance(endpoints, list) or not all(isinstance(item, str) for item in endpoints):
         if provider == "opencode-go":
             upstream_id = strip_opencode_go_model(model_id) if is_opencode_go_model(model_id) else model_id
             endpoints = [OPENCODE_GO_MESSAGES_ENDPOINT if upstream_id in OPENCODE_GO_MESSAGES_MODELS else OPENCODE_GO_CHAT_ENDPOINT]
-        else:
+        elif provider == "xai":
             endpoints = list(XAI_SUPPORTED_ENDPOINTS if provider == "xai" else CODEX_SUPPORTED_ENDPOINTS)
+        else:
+            endpoints = list(CODEX_SUPPORTED_ENDPOINTS)
     row["supported_endpoints"] = endpoints
     return row
 
@@ -579,6 +620,8 @@ def _dashboard_providers(gateways: list[dict[str, Any]], models: list[dict[str, 
             row["supported_endpoints"].update((OPENCODE_GO_CHAT_ENDPOINT, OPENCODE_GO_MESSAGES_ENDPOINT))
         elif provider == "xai":
             row["supported_endpoints"].update(XAI_SUPPORTED_ENDPOINTS)
+        elif provider == "cursor":
+            row["supported_endpoints"].update(CODEX_SUPPORTED_ENDPOINTS)
     for model in models:
         provider = str(model["gateway"])
         row = grouped.setdefault(provider, {
@@ -622,6 +665,8 @@ async def chat_completions(request: Request, payload: ChatCompletionRequest) -> 
         return await _serve_opencode_go_chat(request, s, chat, model, stream)
     if is_xai_model(model):
         return await _serve_xai_chat(request, s, chat, model, stream)
+    if model.startswith("cursor/"):
+        return await _serve_cursor_chat(s, chat, model, stream)
 
     if stream:
         acct, upstream, err = await _open(s.proxy, responses_body)
@@ -701,6 +746,8 @@ async def responses(request: Request, payload: ResponsesRequest) -> Response:
         )
     if is_xai_model(rbody.get("model")):
         return await _serve_xai_responses(request, s, rbody)
+    if str(rbody.get("model") or "").startswith("cursor/"):
+        return await _serve_cursor_responses(s, rbody)
 
     client_stream = bool(rbody.get("stream"))
     rbody["stream"] = True          # the Codex backend always streams
@@ -776,13 +823,148 @@ async def _serve_xai_chat(
 
 async def _serve_xai_responses(request: Request, s, body: dict) -> Response:
     upstream_body = dict(body)
+    conversation_id = request.headers.get("x-grok-conv-id") or upstream_body.get("prompt_cache_key")
 
     async def open_upstream():
-        return await s.xai_proxy.open_responses(upstream_body)
+        return await s.xai_proxy.open_responses(
+            upstream_body, conversation_id=conversation_id
+        )
 
     if upstream_body.get("stream"):
         return await _serve_direct_stream(open_upstream)
     return await _serve_direct_nonstream(request, s, open_upstream)
+
+
+async def _start_cursor(s, model: str, prompt: str, stream: bool):
+    candidates = await s.router.candidates("cursor")
+    last_error = "no attempts"
+    for account in candidates:
+        try:
+            process = await start_cursor_run(
+                s.settings, account, model.removeprefix("cursor/"), prompt, stream
+            )
+            return account, process
+        except OSError as exc:
+            last_error = f"{account.id}: {exc}"
+    raise AllAccountsFailed(f"all Cursor attempts failed ({last_error})")
+
+
+async def _serve_cursor_chat(s, body: dict, model: str, stream: bool) -> Response:
+    prompt = cursor_prompt_from_chat(body.get("messages") or [])
+    try:
+        account, process = await _start_cursor(s, model, prompt, stream)
+    except NoAccountAvailable as exc:
+        return _error(503, str(exc), "no_account_available")
+    except AllAccountsFailed as exc:
+        return _error(502, exc.detail, "upstream_unavailable")
+
+    if not stream:
+        stdout, stderr = await process.communicate()
+        if process.returncode != 0:
+            return _error(
+                502, stderr.decode(errors="replace").strip() or "Cursor request failed",
+                "upstream_unavailable",
+            )
+        payload = json.loads(stdout)
+        await s.router.record_success(account)
+        return JSONResponse({
+            "id": f"chatcmpl_{uuid4().hex}",
+            "object": "chat.completion",
+            "created": int(time.time()),
+            "model": model,
+            "choices": [{"index": 0, "message": {
+                "role": "assistant", "content": payload.get("result") or "",
+            }, "finish_reason": "stop"}],
+        }, headers={"X-Gateway-Account": account.id})
+
+    async def generate():
+        chat_id = f"chatcmpl_{uuid4().hex}"
+        assert process.stdout
+        async for line in process.stdout:
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if event.get("type") != "assistant":
+                continue
+            for item in (event.get("message") or {}).get("content") or []:
+                text = item.get("text") if isinstance(item, dict) else None
+                if text:
+                    chunk = {
+                        "id": chat_id, "object": "chat.completion.chunk",
+                        "created": int(time.time()), "model": model,
+                        "choices": [{"index": 0, "delta": {"content": text}, "finish_reason": None}],
+                    }
+                    yield f"data: {json.dumps(chunk)}\n\n".encode()
+        result = await process.wait()
+        if result == 0:
+            await s.router.record_success(account)
+            yield b"data: [DONE]\n\n"
+
+    return StreamingResponse(
+        generate(), media_type="text/event-stream",
+        headers={"X-Gateway-Account": account.id},
+    )
+
+
+async def _serve_cursor_responses(s, body: dict) -> Response:
+    model = str(body.get("model") or "")
+    prompt = cursor_prompt_from_responses(body.get("input"))
+    stream = bool(body.get("stream"))
+    if stream:
+        # Cursor emits official NDJSON deltas; expose them as Responses text deltas.
+        try:
+            account, process = await _start_cursor(s, model, prompt, True)
+        except (NoAccountAvailable, AllAccountsFailed) as exc:
+            return _error(503, str(exc), "upstream_unavailable")
+
+        async def generate():
+            assert process.stdout
+            async for line in process.stdout:
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if event.get("type") == "assistant":
+                    for item in (event.get("message") or {}).get("content") or []:
+                        if isinstance(item, dict) and item.get("text"):
+                            yield (
+                                "data: " + json.dumps({
+                                    "type": "response.output_text.delta",
+                                    "delta": item["text"],
+                                }) + "\n\n"
+                            ).encode()
+            if await process.wait() == 0:
+                await s.router.record_success(account)
+                yield b"data: [DONE]\n\n"
+
+        return StreamingResponse(
+            generate(), media_type="text/event-stream",
+            headers={"X-Gateway-Account": account.id},
+        )
+
+    try:
+        account, process = await _start_cursor(s, model, prompt, False)
+    except (NoAccountAvailable, AllAccountsFailed) as exc:
+        return _error(503, str(exc), "upstream_unavailable")
+    stdout, stderr = await process.communicate()
+    if process.returncode != 0:
+        return _error(
+            502, stderr.decode(errors="replace").strip() or "Cursor request failed",
+            "upstream_unavailable",
+        )
+    payload = json.loads(stdout)
+    await s.router.record_success(account)
+    return JSONResponse({
+        "id": f"resp_{uuid4().hex}",
+        "object": "response",
+        "created_at": int(time.time()),
+        "status": "completed",
+        "model": model,
+        "output": [{"type": "message", "role": "assistant", "content": [{
+            "type": "output_text", "text": payload.get("result") or "", "annotations": [],
+        }]}],
+    }, headers={"X-Gateway-Account": account.id})
 
 
 async def _serve_direct_stream(open_upstream: Callable) -> Response:

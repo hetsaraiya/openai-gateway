@@ -26,8 +26,13 @@ def make_settings(strategy="fallback", **kw) -> Settings:
         opencode_go_base_url=kw.get("opencode_go_base_url", "https://go.test/v1"),
         opencode_go_api_keys=kw.get("opencode_go_api_keys", ""),
         xai_base_url=kw.get("xai_base_url", "https://xai.test/v1"),
-        xai_api_keys=kw.get("xai_api_keys", ""),
-        codex_client_version=kw.get("codex_client_version", "0.139.0"),
+        xai_oauth_issuer=kw.get("xai_oauth_issuer", "https://auth.xai.test"),
+        xai_oauth_client_id=kw.get("xai_oauth_client_id", "xai-client"),
+        xai_oauth_scopes=kw.get(
+            "xai_oauth_scopes", "openid profile email offline_access grok-cli:access api:access"
+        ),
+        grok_client_version=kw.get("grok_client_version", "0.2.112"),
+        codex_client_version=kw.get("codex_client_version", "0.145.0"),
         models_cache_ttl=kw.get("models_cache_ttl", 3600),
     )
 

@@ -7,6 +7,7 @@ import { Button } from "./ui/button"
 
 export function DeviceLogin({ login, onCopy }: { login: Login; onCopy: (value: string) => void }) {
   const [copied, setCopied] = useState(false)
+  const provider = login.provider === "xai" ? "xAI" : login.provider === "cursor" ? "Cursor" : "OpenAI"
 
   if (login.status === "complete") {
     return (
@@ -51,12 +52,12 @@ export function DeviceLogin({ login, onCopy }: { login: Login; onCopy: (value: s
           <h2 className="text-sm font-semibold tracking-[-0.01em] text-ink">
             Finish signing in as <span className="font-mono">{login.account_id}</span>
           </h2>
-          <p className="mt-0.5 text-[13px] text-subtle">Waiting for OpenAI to confirm the device…</p>
+          <p className="mt-0.5 text-[13px] text-subtle">Waiting for {provider} to confirm the device…</p>
         </div>
       </div>
 
       <ol className="divide-y divide-line">
-        <Step index={1} title="Open the secure OpenAI sign-in page">
+        <Step index={1} title={`Open the secure ${provider} sign-in page`}>
           {login.verification_url ? (
             <a
               href={login.verification_url}
@@ -72,7 +73,7 @@ export function DeviceLogin({ login, onCopy }: { login: Login; onCopy: (value: s
           )}
         </Step>
 
-        <Step index={2} title="Enter this one-time device code">
+        {login.user_code && <Step index={2} title="Enter this one-time device code">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
             <code className="min-w-0 rounded-lg border border-line bg-inset px-6 py-3 text-center font-mono text-lg font-semibold tracking-[0.28em] text-ink sm:min-w-[13rem]">
               {login.user_code ?? "······"}
@@ -82,7 +83,7 @@ export function DeviceLogin({ login, onCopy }: { login: Login; onCopy: (value: s
               {copied ? "Copied" : "Copy"}
             </Button>
           </div>
-        </Step>
+        </Step>}
       </ol>
     </section>
   )

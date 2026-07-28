@@ -15,6 +15,11 @@ from decouple import config
 
 # Public OAuth client id used by the Codex CLI (overridable if OpenAI rotates it).
 DEFAULT_CODEX_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
+DEFAULT_XAI_CLIENT_ID = "b1a00492-073a-47ea-816f-4c329264a828"
+DEFAULT_XAI_SCOPES = (
+    "openid profile email offline_access grok-cli:access api:access "
+    "conversations:read conversations:write workspaces:read workspaces:write"
+)
 
 
 @dataclass(frozen=True)
@@ -29,12 +34,17 @@ class Settings:
     # gateway uses OpenAI-compatible chat completions or Anthropic Messages.
     opencode_go_base_url: str = "https://opencode.ai/zen/go/v1"
     opencode_go_api_keys: str = ""
-    xai_base_url: str = "https://api.x.ai/v1"
-    xai_api_keys: str = ""
+    # Grok subscription endpoint and OAuth client used by the official CLI.
+    xai_base_url: str = "https://cli-chat-proxy.grok.com/v1"
+    xai_oauth_issuer: str = "https://auth.x.ai"
+    xai_oauth_client_id: str = DEFAULT_XAI_CLIENT_ID
+    xai_oauth_scopes: str = DEFAULT_XAI_SCOPES
+    grok_client_version: str = "0.2.112"
     # Where access tokens are refreshed.
     oauth_token_url: str = "https://auth.openai.com/oauth/token"
     oauth_client_id: str = DEFAULT_CODEX_CLIENT_ID
     codex_binary: str = "codex"
+    cursor_binary: str = "cursor-agent"
     # Refresh the access token this many seconds before it actually expires.
     token_refresh_skew: int = 300
 
@@ -43,7 +53,7 @@ class Settings:
     openai_beta: str = "responses=experimental"
     # Sent as ?client_version= when listing models (the backend gates models on
     # a minimum client version). Defaults to a recent Codex CLI release.
-    codex_client_version: str = "0.139.0"
+    codex_client_version: str = "0.145.0"
     # How long to trust the fetched model catalog before revalidating (seconds).
     models_cache_ttl: int = 3600
 
@@ -80,17 +90,23 @@ def get_settings() -> Settings:
             "OPENCODE_GO_BASE_URL", default="https://opencode.ai/zen/go/v1"
         ).rstrip("/"),
         opencode_go_api_keys=config("OPENCODE_GO_API_KEYS", default=""),
-        xai_base_url=config("XAI_BASE_URL", default="https://api.x.ai/v1").rstrip("/"),
-        xai_api_keys=config("XAI_API_KEYS", default=""),
+        xai_base_url=config(
+            "XAI_BASE_URL", default="https://cli-chat-proxy.grok.com/v1"
+        ).rstrip("/"),
+        xai_oauth_issuer=config("XAI_OAUTH_ISSUER", default="https://auth.x.ai").rstrip("/"),
+        xai_oauth_client_id=config("XAI_OAUTH_CLIENT_ID", default=DEFAULT_XAI_CLIENT_ID),
+        xai_oauth_scopes=config("XAI_OAUTH_SCOPES", default=DEFAULT_XAI_SCOPES),
+        grok_client_version=config("GROK_CLIENT_VERSION", default="0.2.112"),
         oauth_token_url=config(
             "OAUTH_TOKEN_URL", default="https://auth.openai.com/oauth/token"
         ),
         oauth_client_id=config("CODEX_CLIENT_ID", default=DEFAULT_CODEX_CLIENT_ID),
         codex_binary=config("CODEX_BINARY", default="codex"),
+        cursor_binary=config("CURSOR_BINARY", default="cursor-agent"),
         token_refresh_skew=config("TOKEN_REFRESH_SKEW", default=300, cast=int),
         originator=config("CODEX_ORIGINATOR", default="codex_cli_rs"),
         openai_beta=config("CODEX_OPENAI_BETA", default="responses=experimental"),
-        codex_client_version=config("CODEX_CLIENT_VERSION", default="0.139.0"),
+        codex_client_version=config("CODEX_CLIENT_VERSION", default="0.145.0"),
         models_cache_ttl=config("MODELS_CACHE_TTL", default=3600, cast=int),
         strategy=config("ROUTING_STRATEGY", default="fallback"),
         rate_limit_cooldown=config("RATE_LIMIT_COOLDOWN", default=60, cast=int),

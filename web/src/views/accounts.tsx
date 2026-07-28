@@ -1,4 +1,4 @@
-import { Cloud, KeyRound, Plus, Zap } from "lucide-react"
+import { Cloud, KeyRound, MousePointer2, Plus, Zap } from "lucide-react"
 
 import { AccountDialog } from "../components/account-dialog"
 import { DeleteAccountDialog } from "../components/delete-account-dialog"
@@ -41,7 +41,7 @@ export function Accounts({
       <PageHeader
         eyebrow="Identity & access"
         title="Accounts"
-        description="Manage OpenAI device sessions and provider API keys in one place. Credentials are stored by the gateway, never by this page."
+        description="Manage OpenAI and Grok subscription sessions plus provider keys in one place. Credentials are stored by the gateway, never by this page."
         actions={
           <div className="flex flex-wrap gap-2">
             <AccountDialog
@@ -60,11 +60,24 @@ export function Accounts({
             <AccountDialog
               gatewayKey={gatewayKey}
               disabled={!gatewayKey.trim()}
+              provider="cursor"
+              trigger={
+                <button className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-line bg-surface px-4 text-sm font-medium text-ink shadow-panel transition-colors hover:border-line-strong hover:bg-elevated">
+                  <MousePointer2 size={16} aria-hidden="true" />
+                  Cursor subscription
+                </button>
+              }
+              onLoginStarted={onLoginStarted}
+              onAccountAdded={onAccountAdded}
+            />
+            <AccountDialog
+              gatewayKey={gatewayKey}
+              disabled={!gatewayKey.trim()}
               provider="xai"
               trigger={
                 <button className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-line bg-surface px-4 text-sm font-medium text-ink shadow-panel transition-colors hover:border-line-strong hover:bg-elevated">
                   <Zap size={16} aria-hidden="true" />
-                  xAI API key
+                  Grok subscription
                 </button>
               }
               onLoginStarted={onLoginStarted}
@@ -114,7 +127,7 @@ export function Accounts({
           <PanelEmpty
             icon={<KeyRound size={18} aria-hidden="true" />}
             title="No accounts connected yet"
-            hint="Add an OpenAI account, OpenCode Go key, or xAI API key to start routing requests."
+            hint="Add an OpenAI, Grok, or Cursor subscription, or an OpenCode Go key to start routing requests."
           />
         )}
       </Panel>

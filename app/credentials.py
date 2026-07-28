@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import time
 import uuid
 from pathlib import Path
@@ -196,7 +197,7 @@ class OpenCodeGoAccount:
 
 
 class XAIAccount:
-    """xAI inference account backed by an API key."""
+    """Grok subscription account backed by xAI OAuth tokens."""
 
     provider = "xai"
     daily_limit: Optional[int] = None
@@ -206,32 +207,148 @@ class XAIAccount:
         self.id = acct_id or (path.stem if path else "xai")
         self._settings = settings
         self._data = data
-        api_key = str(data.get("api_key") or data.get("XAI_API_KEY") or "").strip()
-        if not valid_api_key(api_key):
-            label = path.name if path else self.id
-            raise CredentialError(f"{label}: missing or invalid api_key")
-        self._api_key = api_key
+        self._lock = asyncio.Lock()
+        label = path.name if path else self.id
+        if str(data.get("type") or "").lower() not in ("xai-oauth", "grok-oauth"):
+            raise CredentialError(f"{label}: xAI accounts require Grok subscription OAuth")
+        if not data.get("access_token") or not data.get("refresh_token"):
+            raise CredentialError(f"{label}: missing xAI OAuth access_token or refresh_token")
 
     @property
     def access_token(self) -> str:
-        return self._api_key
+        return self._data["access_token"]
+
+    @property
+    def refresh_token(self) -> str:
+        return self._data["refresh_token"]
 
     @property
     def account_id(self) -> Optional[str]:
-        return None
+        return self._data.get("user_id")
 
     @property
     def plan(self) -> str:
-        return "xai-api"
+        return "grok-subscription"
 
     def masked_token(self) -> str:
         tok = self.access_token
         return f"{tok[:6]}…{tok[-4:]}" if len(tok) > 12 else "****"
 
     def expires_at(self) -> Optional[int]:
+        value = self._data.get("expires_at")
+        if isinstance(value, (int, float)):
+            return int(value)
+        return jwt_util.expiry(self.access_token)
+
+    async def ensure_fresh(self, client: httpx.AsyncClient, force: bool = False) -> None:
+        expires_at = self.expires_at()
+        expired = expires_at is not None and time.time() >= (
+            expires_at - self._settings.token_refresh_skew
+        )
+        if not (force or expired):
+            return
+        async with self._lock:
+            expires_at = self.expires_at()
+            if not force and expires_at is not None and time.time() < (
+                expires_at - self._settings.token_refresh_skew
+            ):
+                return
+            await self._refresh(client)
+
+    async def _refresh(self, client: httpx.AsyncClient) -> None:
+        token_url = self._data.get("token_endpoint") or (
+            f"{self._settings.xai_oauth_issuer}/oauth2/token"
+        )
+        response = await client.post(
+            token_url,
+            data={
+                "grant_type": "refresh_token",
+                "refresh_token": self.refresh_token,
+                "client_id": self._data.get("client_id") or self._settings.xai_oauth_client_id,
+            },
+            headers={
+                "x-grok-client-version": self._settings.grok_client_version,
+                "x-grok-client-surface": "headless",
+            },
+            timeout=30.0,
+        )
+        if response.status_code != 200:
+            raise CredentialError(
+                f"token refresh failed for {self.id}: HTTP {response.status_code} "
+                f"{response.text[:200]}"
+            )
+        try:
+            payload = response.json()
+        except json.JSONDecodeError as exc:
+            raise CredentialError(f"token refresh returned invalid JSON for {self.id}") from exc
+        access_token = payload.get("access_token") if isinstance(payload, dict) else None
+        if not access_token:
+            raise CredentialError(f"token refresh returned no access token for {self.id}")
+
+        updated = copy.deepcopy(self._data)
+        updated["access_token"] = access_token
+        if payload.get("refresh_token"):
+            updated["refresh_token"] = payload["refresh_token"]
+        if payload.get("id_token"):
+            updated["id_token"] = payload["id_token"]
+        expires_in = payload.get("expires_in")
+        updated["expires_at"] = (
+            int(time.time()) + int(expires_in)
+            if isinstance(expires_in, (int, float))
+            else jwt_util.expiry(access_token)
+        )
+        updated["last_refresh"] = dt.datetime.now(dt.timezone.utc).isoformat(
+            timespec="milliseconds"
+        ).replace("+00:00", "Z")
+        if self.path is None:
+            raise CredentialError(f"could not persist refreshed tokens for {self.id}")
+        try:
+            _write_auth_json(self.path, updated)
+        except OSError as exc:
+            raise CredentialError(f"could not persist refreshed tokens for {self.id}: {exc}") from exc
+        self._data = updated
+
+
+class CursorAccount:
+    """Cursor subscription session owned and refreshed by Cursor Agent CLI."""
+
+    provider = "cursor"
+    daily_limit: Optional[int] = None
+
+    def __init__(self, path: Path, data: dict, settings: Settings):
+        self.path = path
+        self.id = path.stem
+        self._settings = settings
+        self._data = data
+        if str(data.get("type") or "").lower() != "cursor-cli":
+            raise CredentialError(f"{path.name}: invalid Cursor account")
+        home_name = str(data.get("home") or "")
+        home = (Path(settings.auth_dir) / ".cursor-accounts" / home_name).resolve()
+        root = (Path(settings.auth_dir) / ".cursor-accounts").resolve()
+        if not home_name or root not in home.parents or not home.is_dir():
+            raise CredentialError(f"{path.name}: missing Cursor CLI session")
+        self.home = home
+
+    @property
+    def access_token(self) -> str:
+        return "cursor-cli-session"
+
+    @property
+    def account_id(self) -> Optional[str]:
+        return self._data.get("email") or self._data.get("user_id")
+
+    @property
+    def plan(self) -> str:
+        return "cursor-subscription"
+
+    def masked_token(self) -> str:
+        return "session"
+
+    def expires_at(self) -> Optional[int]:
         return None
 
     async def ensure_fresh(self, client: httpx.AsyncClient, force: bool = False) -> None:
+        # Cursor Agent owns access-token refresh inside its credential store.
         return None
 
 
@@ -258,10 +375,16 @@ def _is_opencode_go(data: dict) -> bool:
 
 def _is_xai(data: dict) -> bool:
     provider = str(data.get("provider") or data.get("type") or "").lower().replace("_", "-")
-    return provider == "xai" or "XAI_API_KEY" in data
+    return provider in ("xai", "xai-oauth", "grok", "grok-oauth") or "XAI_API_KEY" in data
+
+
+def _is_cursor(data: dict) -> bool:
+    return str(data.get("provider") or data.get("type") or "").lower() == "cursor-cli"
 
 
 def _account_from_data(path: Path, data: dict, settings: Settings):
+    if _is_cursor(data):
+        return CursorAccount(path, data, settings)
     if _is_xai(data):
         return XAIAccount(path, data, settings)
     if _is_opencode_go(data):
@@ -280,17 +403,6 @@ def _env_opencode_go_accounts(settings: Settings) -> list[OpenCodeGoAccount]:
     return accounts
 
 
-def _env_xai_accounts(settings: Settings) -> list[XAIAccount]:
-    accounts: list[XAIAccount] = []
-    for idx, api_key in enumerate(filter(None, (key.strip() for key in settings.xai_api_keys.split(","))), 1):
-        acct_id = f"xai-env-{idx}"
-        try:
-            accounts.append(XAIAccount(None, {"type": "xai", "api_key": api_key}, settings, acct_id=acct_id))
-        except CredentialError as exc:
-            log.error("skipping %s: %s", acct_id, exc)
-    return accounts
-
-
 def load_accounts(settings: Settings) -> list:
     auth_dir = Path(settings.auth_dir)
     auth_dir.mkdir(parents=True, exist_ok=True)
@@ -303,7 +415,6 @@ def load_accounts(settings: Settings) -> list:
         except (json.JSONDecodeError, CredentialError) as exc:
             log.error("skipping %s: %s", path.name, exc)
     accounts.extend(_env_opencode_go_accounts(settings))
-    accounts.extend(_env_xai_accounts(settings))
 
     if not accounts:
         # Allowed: the gateway can boot empty and have accounts uploaded via the
@@ -348,6 +459,16 @@ def delete_account_file(settings: Settings, account_id: str) -> bool:
         return False
     path = Path(settings.auth_dir) / f"{account_id}.json"
     if path.exists():
+        try:
+            data = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError):
+            data = {}
+        if _is_cursor(data):
+            home_name = str(data.get("home") or "")
+            home = (Path(settings.auth_dir) / ".cursor-accounts" / home_name).resolve()
+            root = (Path(settings.auth_dir) / ".cursor-accounts").resolve()
+            if home_name and root in home.parents and home.is_dir():
+                shutil.rmtree(home)
         path.unlink()
         return True
     return False

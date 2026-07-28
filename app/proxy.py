@@ -169,14 +169,36 @@ def strip_xai_model(model: str) -> str:
     return model[len(XAI_MODEL_PREFIX):]
 
 
-def build_xai_headers(acct, stream: bool, conversation_id: Optional[str] = None) -> dict:
+def build_xai_headers(
+    settings: Settings,
+    acct,
+    stream: bool,
+    conversation_id: Optional[str] = None,
+    model: Optional[str] = None,
+) -> dict:
     headers = {
         "Authorization": f"Bearer {acct.access_token}",
+        "X-XAI-Token-Auth": "xai-grok-cli",
+        "User-Agent": (
+            f"grok-pager/{settings.grok_client_version} "
+            f"grok-shell/{settings.grok_client_version} (linux; gateway)"
+        ),
+        "x-grok-client-identifier": "grok-shell",
+        "x-grok-client-version": settings.grok_client_version,
+        "x-grok-client-mode": "headless",
+        "x-authenticateresponse": "authenticate-response",
         "Content-Type": "application/json",
         "Accept": "text/event-stream" if stream else "application/json",
     }
+    if acct.account_id:
+        headers["x-userid"] = acct.account_id
+    email = getattr(acct, "_data", {}).get("email")
+    if email:
+        headers["x-email"] = email
     if conversation_id:
         headers["x-grok-conv-id"] = conversation_id
+    if model:
+        headers["x-grok-model-override"] = model
     return headers
 
 
@@ -286,22 +308,30 @@ class XAIProxy:
         self, chat_body: dict, conversation_id: Optional[str] = None
     ) -> tuple[object, httpx.Response]:
         body = dict(chat_body)
-        body["model"] = strip_xai_model(str(body.get("model") or ""))
+        model = strip_xai_model(str(body.get("model") or ""))
+        body["model"] = model
         body.pop("prompt_cache_key", None)
         return await self._open(
             "/chat/completions",
             body,
             stream=bool(body.get("stream")),
             conversation_id=conversation_id,
+            model=model,
         )
 
-    async def open_responses(self, responses_body: dict) -> tuple[object, httpx.Response]:
+    async def open_responses(
+        self, responses_body: dict, conversation_id: Optional[str] = None
+    ) -> tuple[object, httpx.Response]:
         body = dict(responses_body)
-        body["model"] = strip_xai_model(str(body.get("model") or ""))
+        model = strip_xai_model(str(body.get("model") or ""))
+        body["model"] = model
+        body.pop("prompt_cache_key", None)
         return await self._open(
             "/responses",
             body,
             stream=bool(body.get("stream")),
+            conversation_id=conversation_id,
+            model=model,
         )
 
     async def _open(
@@ -310,25 +340,35 @@ class XAIProxy:
         body: dict,
         stream: bool,
         conversation_id: Optional[str] = None,
+        model: Optional[str] = None,
     ) -> tuple[object, httpx.Response]:
         candidates = await self._router.candidates("xai")
         last_error = "no attempts made"
         for acct in candidates:
             try:
-                await acct.ensure_fresh(self._client)
-                req = self._client.build_request(
-                    "POST",
-                    f"{self._settings.xai_base_url}{path}",
-                    headers=build_xai_headers(acct, stream, conversation_id),
-                    json=body,
-                    timeout=self._settings.request_timeout,
-                )
-                resp = await self._client.send(req, stream=True)
+                resp = None
+                for forced in (False, True):
+                    await acct.ensure_fresh(self._client, force=forced)
+                    req = self._client.build_request(
+                        "POST",
+                        f"{self._settings.xai_base_url}{path}",
+                        headers=build_xai_headers(
+                            self._settings, acct, stream, conversation_id, model
+                        ),
+                        json=body,
+                        timeout=self._settings.request_timeout,
+                    )
+                    resp = await self._client.send(req, stream=True)
+                    if resp.status_code != 401 or forced:
+                        break
+                    await resp.aclose()
             except (CredentialError, httpx.ConnectError, httpx.ReadTimeout, httpx.RemoteProtocolError) as exc:
                 last_error = f"{acct.id}: {exc}"
                 log.warning("xAI request failed on %s: %s", acct.id, exc)
                 continue
 
+            if resp is None:
+                continue
             if resp.status_code in _RETRYABLE_STATUS:
                 if resp.status_code == 429:
                     await self._router.record_rate_limited(acct, self._retry_after(resp))

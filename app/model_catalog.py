@@ -18,6 +18,7 @@ import httpx
 
 from .config import Settings
 from .credentials import CredentialError
+from .cursor_cli import cursor_models
 from .proxy import (
     CODEX_SUPPORTED_ENDPOINTS,
     OPENCODE_GO_CHAT_ENDPOINT,
@@ -50,6 +51,9 @@ class ModelCatalog:
         self._xai_raw: list[dict] = []
         self._xai_fetched_at: float = 0.0
         self._xai_lock = asyncio.Lock()
+        self._cursor_raw: list[dict] = []
+        self._cursor_fetched_at: float = 0.0
+        self._cursor_lock = asyncio.Lock()
         self._etag: Optional[str] = None
         self._fetched_at: float = 0.0
 
@@ -142,12 +146,14 @@ class ModelCatalog:
             data.extend(self._to_openai(m) for m in self._visible())
         except ModelCatalogError as exc:
             codex_error = exc
-        opencode_models, xai_models = await asyncio.gather(
+        opencode_models, xai_models, cursor_catalog = await asyncio.gather(
             self._opencode_go_models(),
             self._xai_models(),
+            self._cursor_models(),
         )
         data.extend(opencode_models)
         data.extend(xai_models)
+        data.extend(cursor_catalog)
         if not data and codex_error:
             raise codex_error
         return {"object": "list", "data": data}
@@ -164,8 +170,36 @@ class ModelCatalog:
             # to input order for ties / missing values.
             visible.sort(key=lambda m: m.get("priority", 1_000_000))
             return visible[0].get("slug")
-        provider_models = await asyncio.gather(self._opencode_go_models(), self._xai_models())
+        provider_models = await asyncio.gather(
+            self._opencode_go_models(), self._xai_models(), self._cursor_models()
+        )
         return next((model["id"] for models in provider_models for model in models), None)
+
+    async def _cursor_models(self) -> list[dict]:
+        if self._cursor_raw and (
+            time.time() - self._cursor_fetched_at
+        ) < self._settings.models_cache_ttl:
+            return list(self._cursor_raw)
+        async with self._cursor_lock:
+            try:
+                candidates = await self._router.candidates("cursor")
+            except NoAccountAvailable:
+                return []
+            last_error = ""
+            for account in candidates:
+                try:
+                    models = await cursor_models(self._settings, account)
+                except (OSError, RuntimeError) as exc:
+                    last_error = f"{account.id}: {exc}"
+                    continue
+                self._cursor_raw = models
+                self._cursor_fetched_at = time.time()
+                return list(models)
+            if self._cursor_raw:
+                log.warning("Cursor model refresh failed (%s); serving stale cache", last_error)
+                return list(self._cursor_raw)
+            log.warning("Cursor models unavailable (%s)", last_error or "no attempts")
+            return []
 
     async def _opencode_go_models(self) -> list[dict]:
         try:
@@ -238,18 +272,23 @@ class ModelCatalog:
         last_error = ""
         for acct in candidates:
             try:
+                await acct.ensure_fresh(self._client)
                 response = await self._client.get(
-                    f"{self._settings.xai_base_url}/language-models",
-                    headers=build_xai_headers(acct, stream=False),
+                    f"{self._settings.xai_base_url}/models",
+                    headers=build_xai_headers(self._settings, acct, stream=False),
                     timeout=30.0,
                 )
-            except httpx.HTTPError as exc:
+            except (CredentialError, httpx.HTTPError) as exc:
                 last_error = f"{acct.id}: {exc}"
                 continue
 
             if response.status_code == 200:
-                models = (response.json() or {}).get("models") or []
-                self._xai_raw = [model for model in models if isinstance(model, dict) and model.get("id")]
+                payload = response.json() or {}
+                models = payload.get("data") or payload.get("models") or []
+                self._xai_raw = [
+                    model for model in models
+                    if isinstance(model, dict) and (model.get("id") or model.get("model"))
+                ]
                 self._xai_fetched_at = time.time()
                 return [self._xai_to_openai(model) for model in self._xai_raw]
             if response.status_code in _RETRYABLE:
@@ -265,15 +304,15 @@ class ModelCatalog:
 
     @staticmethod
     def _xai_to_openai(model: dict) -> dict:
-        model_id = str(model["id"])
+        model_id = str(model.get("id") or model.get("model"))
         return {
             "id": f"xai/{model_id}",
             "object": "model",
             "created": model.get("created", 0),
             "owned_by": model.get("owned_by") or "xai",
-            "display_name": model.get("name") or model_id,
+            "display_name": model.get("name") or model.get("display_name") or model_id,
             "description": model.get("description"),
-            "context_window": model.get("context_length"),
+            "context_window": model.get("context_window") or model.get("context_length"),
             "input_modalities": model.get("input_modalities"),
             "output_modalities": model.get("output_modalities"),
             "gateway": "xai",

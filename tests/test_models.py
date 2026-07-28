@@ -17,7 +17,7 @@ CATALOG = {"models": [
 ]}
 
 
-def _catalog(tmp_path, handler, client_version="0.139.0", models_cache_ttl=3600):
+def _catalog(tmp_path, handler, client_version="0.145.0", models_cache_ttl=3600):
     settings = make_settings(codex_client_version=client_version, models_cache_ttl=models_cache_ttl)
     accounts = [make_account(tmp_path, "a", settings=settings)]
     from app.quota import QuotaStore
@@ -49,7 +49,7 @@ async def test_openai_list_maps_and_filters(tmp_path):
         assert first["object"] == "model" and first["owned_by"] == "openai"
         assert first["context_window"] == 272000
         assert seen["path"].endswith("/models")
-        assert seen["cv"] == "0.139.0"
+        assert seen["cv"] == "0.145.0"
         assert seen["auth"].startswith("Bearer ")
     finally:
         await client.aclose()

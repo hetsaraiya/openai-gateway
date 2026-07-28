@@ -41,6 +41,7 @@ export type LoginStatus = "starting" | "pending" | "complete" | "failed"
 export type Login = {
   id: string
   account_id: string
+  provider: "codex" | "xai" | "cursor"
   status: LoginStatus
   verification_url?: string
   user_code?: string
@@ -93,27 +94,20 @@ export function startDeviceLogin(accountId: string, key: string) {
   return request<Login>(`/admin/accounts/${encodeURIComponent(accountId)}/login/device`, key, { method: "POST" })
 }
 
+export function startProviderDeviceLogin(provider: "xai" | "cursor", accountId: string, key: string) {
+  return request<Login>(
+    `/admin/providers/${provider}/accounts/${encodeURIComponent(accountId)}/login/device`,
+    key,
+    { method: "POST" },
+  )
+}
+
 export function addOpenCodeKey(
   payload: { api_key: string; identifier?: string; label?: string },
   key: string,
 ) {
   return request<{ status: "ok"; id: string; label?: string; replaced: boolean; provider: "opencode-go" }>(
     "/v1/admin/opencode-go/keys",
-    key,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    },
-  )
-}
-
-export function addXAIKey(
-  payload: { api_key: string; identifier?: string; label?: string },
-  key: string,
-) {
-  return request<{ status: "ok"; id: string; label?: string; replaced: boolean; provider: "xai" }>(
-    "/v1/admin/xai/keys",
     key,
     {
       method: "POST",
@@ -154,6 +148,7 @@ export function providerLabel(provider: string) {
   if (provider === "codex") return "OpenAI"
   if (provider === "opencode-go") return "OpenCode Go"
   if (provider === "xai") return "xAI"
+  if (provider === "cursor") return "Cursor"
   return provider
     .split(/[-_]/)
     .filter(Boolean)

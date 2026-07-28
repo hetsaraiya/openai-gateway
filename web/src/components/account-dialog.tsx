@@ -1,7 +1,14 @@
 import { ArrowUpRight, KeyRound, LoaderCircle, Plus } from "lucide-react"
 import { type ReactNode, useState } from "react"
 
-import { addOpenCodeKey, addXAIKey, ApiError, providerLabel, startDeviceLogin, type Login } from "../lib/api"
+import {
+  addOpenCodeKey,
+  ApiError,
+  providerLabel,
+  startDeviceLogin,
+  startProviderDeviceLogin,
+  type Login,
+} from "../lib/api"
 import { Button } from "./ui/button"
 import { Dialog, DialogContent, DialogHeader, DialogTrigger } from "./ui/dialog"
 import { Field, Input } from "./ui/input"
@@ -31,7 +38,7 @@ export function AccountDialog({
   const [busy, setBusy] = useState(false)
 
   const trimmed = account.trim()
-  const isApiKeyProvider = provider === "opencode-go" || provider === "xai"
+  const isApiKeyProvider = provider === "opencode-go"
   const invalid = trimmed.length > 0 && !VALID_ID.test(trimmed)
 
   function reset(next: boolean) {
@@ -52,8 +59,7 @@ export function AccountDialog({
     setBusy(true)
     try {
       if (isApiKeyProvider) {
-        const addKey = provider === "xai" ? addXAIKey : addOpenCodeKey
-        const result = await addKey(
+        const result = await addOpenCodeKey(
           {
             api_key: apiKey.trim(),
             ...(trimmed ? { identifier: trimmed } : {}),
@@ -63,7 +69,11 @@ export function AccountDialog({
         )
         onAccountAdded?.(result.id)
       } else {
-        onLoginStarted(await startDeviceLogin(trimmed, gatewayKey))
+        onLoginStarted(
+          provider === "xai" || provider === "cursor"
+            ? await startProviderDeviceLogin(provider, trimmed, gatewayKey)
+            : await startDeviceLogin(trimmed, gatewayKey),
+        )
       }
       reset(false)
     } catch (cause) {
@@ -88,13 +98,15 @@ export function AccountDialog({
           description={
             isApiKeyProvider
               ? `Add an ${providerLabel(provider)} API key. It is stored securely by the gateway.`
-              : "Name the account, then finish the secure OpenAI device sign-in in your browser."
+              : provider === "xai" || provider === "cursor"
+                ? `Name the account, then sign in securely with your ${providerLabel(provider)} subscription.`
+                : "Name the account, then finish the secure OpenAI device sign-in in your browser."
           }
         />
         <form className="mt-6 space-y-4" onSubmit={submit} noValidate>
           {isApiKeyProvider && (
             <Field
-              label={provider === "xai" ? "Inference API key" : "Subscription API key"}
+              label="Subscription API key"
               htmlFor="provider-api-key"
               hint="The key is sent directly to your gateway and is never saved in this browser."
             >
@@ -104,7 +116,7 @@ export function AccountDialog({
                 type="password"
                 value={apiKey}
                 onChange={(event) => setApiKey(event.target.value)}
-                placeholder={provider === "xai" ? "xai-…" : "Enter API key"}
+                placeholder="Enter API key"
                 autoComplete="off"
                 spellCheck={false}
                 autoFocus
@@ -161,7 +173,11 @@ export function AccountDialog({
               ) : (
                 <ArrowUpRight size={16} aria-hidden="true" />
               )}
-              {busy ? "Adding…" : isApiKeyProvider ? "Add API key" : "Continue to OpenAI"}
+              {busy
+                ? isApiKeyProvider ? "Adding…" : "Starting…"
+                : isApiKeyProvider
+                  ? "Add API key"
+                  : `Continue to ${providerLabel(provider)}`}
             </Button>
           </div>
         </form>

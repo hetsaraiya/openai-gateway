@@ -135,7 +135,11 @@ export function Sidebar({
                 const providerAccounts = accounts.filter((account) => account.provider === provider.id)
                 const isExpanded = expanded[provider.id] ?? true
                 const isSelected = selectedProvider === provider.id && activeView === "overview"
-                const canAddAccount = provider.id === "codex" || provider.id === "opencode-go" || provider.id === "xai"
+                const canAddAccount =
+                  provider.id === "codex" ||
+                  provider.id === "opencode-go" ||
+                  provider.id === "xai" ||
+                  provider.id === "cursor"
                 return (
                   <section
                     key={provider.id}

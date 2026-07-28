@@ -145,7 +145,8 @@ print(response.choices[0].message.content)
 
 Query `GET /v1/models` to use model IDs actually available to the configured
 accounts. OpenCode Go models use the `opencode-go/<model-id>` prefix at the
-gateway boundary; xAI models use `xai/<model-id>`.
+gateway boundary; xAI models use `xai/<model-id>` and Cursor subscription
+models use `cursor/<model-id>`.
 
 ### xAI prompt caching
 
@@ -162,8 +163,9 @@ curl http://localhost:8000/v1/chat/completions \
 ```
 
 For `/v1/responses`, include `"prompt_cache_key": "conversation-123"` in the
-request body. The gateway preserves xAI's cached-token usage fields. xAI
-inference authenticates with API keys; it does not provide an OAuth flow.
+request body. The gateway maps it to the same stable Grok conversation header
+and preserves cached-token usage fields. xAI accounts authenticate through the
+Grok subscription OAuth device flow; developer-console API keys are not used.
 
 ## Configuration
 
@@ -180,8 +182,11 @@ inference authenticates with API keys; it does not provide an OAuth flow.
 | `DEDUP_ENABLED` | `true` | Enable idempotency-key deduplication |
 | `DEDUP_TTL` | `600` | Deduplicated response lifetime in seconds |
 | `OPENCODE_GO_API_KEYS` | empty | Optional comma-separated subscription keys |
-| `XAI_API_KEYS` | empty | Optional comma-separated xAI inference API keys |
-| `XAI_BASE_URL` | `https://api.x.ai/v1` | xAI inference API base URL |
+| `XAI_BASE_URL` | `https://cli-chat-proxy.grok.com/v1` | Grok subscription inference base URL |
+| `XAI_OAUTH_ISSUER` | `https://auth.x.ai` | xAI OAuth issuer |
+| `XAI_OAUTH_CLIENT_ID` | Grok CLI public client | OAuth device-flow client |
+| `GROK_CLIENT_VERSION` | current supported version | Version identity sent to xAI services |
+| `CURSOR_BINARY` | `cursor-agent` | Official Cursor Agent CLI used for subscription login and headless inference |
 
 See [`.env.example`](./.env.example) for upstream URLs, OAuth behavior, catalog
 caching, and every optional setting.

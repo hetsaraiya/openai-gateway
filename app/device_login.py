@@ -20,6 +20,7 @@ class DeviceLogin:
     home: Path
     process: asyncio.subprocess.Process
     status: str = "starting"
+    provider: str = "codex"
     verification_url: str | None = None
     user_code: str | None = None
     error: str | None = None

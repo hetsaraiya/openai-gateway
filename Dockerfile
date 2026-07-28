@@ -21,19 +21,25 @@ FROM node:22-bookworm-slim AS web-builder
 
 ARG TARGETARCH
 ARG CODEX_VERSION=0.145.0
+ARG CURSOR_VERSION=2026.07.23-e383d2b
 
 WORKDIR /web
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends ca-certificates curl \
     && case "$TARGETARCH" in \
-        amd64) codex_target=x86_64-unknown-linux-musl ;; \
-        arm64) codex_target=aarch64-unknown-linux-musl ;; \
+        amd64) codex_target=x86_64-unknown-linux-musl; cursor_arch=x64 ;; \
+        arm64) codex_target=aarch64-unknown-linux-musl; cursor_arch=arm64 ;; \
         *) echo "Unsupported Codex architecture: $TARGETARCH" >&2; exit 1 ;; \
        esac \
     && curl --fail --location --silent --show-error \
         "https://github.com/openai/codex/releases/download/rust-v${CODEX_VERSION}/codex-${codex_target}.tar.gz" \
         | tar --extract --gzip --file - --directory /tmp \
     && install --mode=755 "/tmp/codex-${codex_target}" /usr/local/bin/codex \
+    && mkdir -p /opt/cursor-agent \
+    && curl --fail --location --silent --show-error \
+        "https://downloads.cursor.com/lab/${CURSOR_VERSION}/linux/${cursor_arch}/agent-cli-package.tar.gz" \
+        | tar --strip-components=1 --extract --gzip --file - --directory /opt/cursor-agent \
+    && ln -s /opt/cursor-agent/cursor-agent /usr/local/bin/cursor-agent \
     && rm -rf /var/lib/apt/lists/*
 RUN corepack enable
 COPY web/package.json web/pnpm-lock.yaml ./
@@ -59,6 +65,8 @@ RUN groupadd --gid 10001 gateway \
 COPY --from=builder --chown=gateway:gateway /app/.venv /app/.venv
 COPY --chown=gateway:gateway app ./app
 COPY --from=web-builder /usr/local/bin/codex /usr/local/bin/codex
+COPY --from=web-builder /opt/cursor-agent /opt/cursor-agent
+RUN ln -s /opt/cursor-agent/cursor-agent /usr/local/bin/cursor-agent
 COPY --from=web-builder --chown=gateway:gateway /web/dist ./app/static
 
 # Writable, restricted mount point for the Codex auth.json files. Tokens are
