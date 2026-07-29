@@ -1,4 +1,4 @@
-import { Eye, EyeOff, LoaderCircle, LockKeyhole, ShieldCheck } from "lucide-react"
+import { ArrowLeft, Eye, EyeOff, LoaderCircle, LockKeyhole, ShieldCheck } from "lucide-react"
 import { useState } from "react"
 
 import { ApiError, checkKey } from "../lib/api"
@@ -15,11 +15,13 @@ export function AccessGate({
   notice,
   onToggleTheme,
   onVerified,
+  onBack,
 }: {
   theme: Theme
   notice?: string
   onToggleTheme: () => void
   onVerified: (key: string) => Promise<void>
+  onBack?: () => void
 }) {
   const [key, setKey] = useState("")
   const [reveal, setReveal] = useState(false)
@@ -48,6 +50,15 @@ export function AccessGate({
         style={{ background: "radial-gradient(60% 100% at 50% 0%, color-mix(in oklab, var(--accent) 20%, transparent), transparent 70%)" }}
         aria-hidden="true"
       />
+
+      {onBack && (
+        <div className="absolute left-4 top-4">
+          <Button variant="ghost" size="sm" onClick={onBack}>
+            <ArrowLeft size={15} aria-hidden="true" />
+            Back
+          </Button>
+        </div>
+      )}
 
       <div className="absolute right-4 top-4">
         <ThemeToggle theme={theme} onToggle={onToggleTheme} />

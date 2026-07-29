@@ -5,12 +5,13 @@ import { Sidebar, TopBar } from "./components/app-shell"
 import { Callout } from "./components/ui/callout"
 import { ToastRegion } from "./components/ui/toast"
 import { ApiError, deleteAccount, fetchDashboard, fetchLogin, testAccount, type Dashboard, type Login } from "./lib/api"
-import { viewFromHash, type View } from "./lib/navigation"
+import { consoleRequested, viewFromHash, type View } from "./lib/navigation"
 import { clearSession, loadSession, saveSession } from "./lib/session"
 import { useTheme } from "./lib/theme"
 import { useToasts } from "./lib/use-toasts"
 import { relativeTime } from "./lib/utils"
 import { Accounts } from "./views/accounts"
+import { Landing } from "./views/landing"
 import { Overview } from "./views/overview"
 
 const LOGIN_POLL_MS = 3000
@@ -23,6 +24,9 @@ export default function App() {
 
   const [gatewayKey, setGatewayKey] = useState(() => loadSession() ?? "")
   const [authenticated, setAuthenticated] = useState(() => Boolean(loadSession()))
+  // Signed-out readers land on the marketing page unless they asked for the
+  // console — by deep link, by /dashboard, or by pressing "Open console".
+  const [consoleEntry, setConsoleEntry] = useState(() => Boolean(loadSession()) || consoleRequested())
   const [data, setData] = useState<Dashboard | null>(null)
   const [sessionNotice, setSessionNotice] = useState("")
   const [loadError, setLoadError] = useState("")
@@ -39,7 +43,9 @@ export default function App() {
   const pushRef = useRef(push)
   pushRef.current = push
 
-  // Forgets the key everywhere — memory and storage — and returns to the gate.
+  // Forgets the key everywhere — memory and storage. A notice means the key was
+  // rejected mid-session, so the gate stays up to collect a new one; a plain
+  // lock hands the reader back to the landing page.
   const endSession = useCallback((notice = "") => {
     clearSession()
     setGatewayKey("")
@@ -50,6 +56,8 @@ export default function App() {
     setUpdatedAt(null)
     setMobileOpen(false)
     setSessionNotice(notice)
+    setConsoleEntry(Boolean(notice))
+    if (!notice && window.location.hash) window.history.pushState(null, "", window.location.pathname)
   }, [])
 
   const loadDashboard = useCallback(async (key: string, options?: { silent?: boolean }) => {
@@ -83,7 +91,12 @@ export default function App() {
   }, [loadDashboard])
 
   useEffect(() => {
-    const syncView = () => setActiveView(viewFromHash())
+    const syncView = () => {
+      setActiveView(viewFromHash())
+      // A console deep link opens the gate; leaving one never closes it, so an
+      // in-console hash change can't drop a signed-in reader onto the landing.
+      setConsoleEntry((current) => current || consoleRequested())
+    }
     window.addEventListener("hashchange", syncView)
     return () => window.removeEventListener("hashchange", syncView)
   }, [])
@@ -173,7 +186,22 @@ export default function App() {
   }
 
   if (!authenticated) {
-    return <AccessGate theme={theme} notice={sessionNotice} onToggleTheme={toggleTheme} onVerified={unlock} />
+    if (!consoleEntry) {
+      return <Landing theme={theme} onToggleTheme={toggleTheme} onOpenConsole={() => setConsoleEntry(true)} />
+    }
+    return (
+      <AccessGate
+        theme={theme}
+        notice={sessionNotice}
+        onToggleTheme={toggleTheme}
+        onVerified={unlock}
+        onBack={() => {
+          setSessionNotice("")
+          setConsoleEntry(false)
+          if (window.location.hash) window.history.pushState(null, "", window.location.pathname)
+        }}
+      />
+    )
   }
 
   return (

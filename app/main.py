@@ -523,6 +523,15 @@ async def list_models(request: Request) -> Response:
         return _error(502, f"could not fetch models: {exc}", "models_unavailable")
 
 
+@app.get("/", response_class=HTMLResponse)
+async def landing() -> Response:
+    """Public landing page. The built bundle decides landing vs console by path."""
+    index = WEB_DIR / "index.html"
+    if index.is_file():
+        return FileResponse(index)
+    return HTMLResponse(_dashboard_html())
+
+
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard() -> Response:
     index = WEB_DIR / "index.html"

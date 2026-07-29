@@ -7,7 +7,20 @@ export const NAVIGATION: { id: View; label: string; icon: LucideIcon }[] = [
   { id: "accounts", label: "Accounts", icon: KeyRound },
 ]
 
-export function viewFromHash(): View {
+function hashView(): View | null {
   const hash = window.location.hash.replace("#", "")
-  return NAVIGATION.some((item) => item.id === hash) ? (hash as View) : "overview"
+  return NAVIGATION.some((item) => item.id === hash) ? (hash as View) : null
+}
+
+export function viewFromHash(): View {
+  return hashView() ?? "overview"
+}
+
+/**
+ * The same bundle serves the public landing page and the console. A console
+ * view in the hash, or the /dashboard path the gateway has always exposed,
+ * means the reader asked for the console rather than the marketing page.
+ */
+export function consoleRequested(): boolean {
+  return hashView() !== null || window.location.pathname.replace(/\/+$/, "") === "/dashboard"
 }

@@ -64,6 +64,19 @@ async def test_dashboard_data_has_json_safe_provider_and_endpoint_rows(tmp_path,
 
 
 @pytest.mark.asyncio
+async def test_landing_page_is_public_and_serves_the_same_shell_as_the_dashboard():
+    """The bundle picks landing vs console from the path, so both must load unauthenticated."""
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        landing = await client.get("/")
+        dashboard = await client.get("/dashboard")
+
+    assert landing.status_code == 200
+    assert dashboard.status_code == 200
+    assert landing.text == dashboard.text
+
+
+@pytest.mark.asyncio
 async def test_dashboard_token_check_only_accepts_a_valid_master_key(monkeypatch):
     settings = make_settings()
     monkeypatch.setattr("app.auth.get_settings", lambda: settings)

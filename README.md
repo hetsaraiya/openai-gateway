@@ -61,11 +61,15 @@ flowchart LR
 | `POST` | `/v1/chat/completions` | OpenAI-compatible chat completions |
 | `POST` | `/v1/responses` | Responses API passthrough |
 | `POST` | `/v1/messages` | Anthropic-compatible OpenCode Go requests |
+| `GET` | `/` | Public landing page |
 | `GET` | `/dashboard` | Browser-based gateway dashboard |
 | `GET` | `/admin/status` | Account and routing status |
 
-Except for `/healthz` and the dashboard shell, gateway and administration
-routes require the configured master key.
+Except for `/healthz`, the landing page, and the dashboard shell, gateway and
+administration routes require the configured master key. The landing page and
+the console are the same bundle: `/` opens the marketing page, `/dashboard`
+opens the key prompt directly, and the console's own views live behind
+`#overview` / `#accounts`.
 
 ## Quick start
 

@@ -4,9 +4,8 @@ export type Theme = "light" | "dark"
 
 const STORAGE_KEY = "gateway-theme"
 
-function systemTheme(): Theme {
-  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"
-}
+/** Light is the designed default; the OS preference no longer overrides it. */
+const DEFAULT_THEME: Theme = "light"
 
 function storedTheme(): Theme | null {
   const value = localStorage.getItem(STORAGE_KEY)
@@ -18,21 +17,12 @@ function apply(theme: Theme) {
 }
 
 export function useTheme() {
-  const [theme, setTheme] = useState<Theme>(() => storedTheme() ?? systemTheme())
+  // Dark is opt-in: it lasts only as long as the reader's stored choice.
+  const [theme, setTheme] = useState<Theme>(() => storedTheme() ?? DEFAULT_THEME)
 
   useEffect(() => {
     apply(theme)
   }, [theme])
-
-  // Follow the OS only while the reader has not made an explicit choice.
-  useEffect(() => {
-    const media = window.matchMedia("(prefers-color-scheme: dark)")
-    const sync = () => {
-      if (!storedTheme()) setTheme(media.matches ? "dark" : "light")
-    }
-    media.addEventListener("change", sync)
-    return () => media.removeEventListener("change", sync)
-  }, [])
 
   const toggle = useCallback(() => {
     setTheme((current) => {

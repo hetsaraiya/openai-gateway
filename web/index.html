@@ -4,17 +4,18 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/src/assets/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f6f7f9" />
-    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0a0c10" />
-    <meta name="description" content="Operations console for the OpenAI Gateway." />
-    <title>OpenAI Gateway · Console</title>
+    <meta name="theme-color" content="#f6f7f9" />
+    <meta
+      name="description"
+      content="A self-hosted, OpenAI-compatible gateway that unifies Codex, Cursor, Grok and OpenCode Go behind one URL — with multi-account routing, cooldown-aware failover and an operator console."
+    />
+    <title>OpenAI Gateway — one endpoint for every AI coding subscription</title>
     <script>
-      // Set the theme before first paint so the console never flashes the wrong one.
+      // Set the theme before first paint so the page never flashes the wrong one.
+      // Light is the default; dark applies only to a reader who chose it here.
       (function () {
         try {
-          var stored = localStorage.getItem("gateway-theme");
-          var dark = stored ? stored === "dark" : window.matchMedia("(prefers-color-scheme: dark)").matches;
-          document.documentElement.classList.toggle("dark", dark);
+          document.documentElement.classList.toggle("dark", localStorage.getItem("gateway-theme") === "dark");
         } catch (_) {
           /* Storage can be blocked; the app applies the theme on mount instead. */
         }

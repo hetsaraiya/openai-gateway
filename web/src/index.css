@@ -44,6 +44,14 @@
   --animate-overlay-in: overlay-in 160ms ease-out;
   --animate-panel-in: panel-in 180ms cubic-bezier(0.16, 1, 0.3, 1);
   --animate-toast-in: toast-in 220ms cubic-bezier(0.16, 1, 0.3, 1);
+
+  /* Landing-page motion: packets travelling along the diagram edges, breathing
+     status nodes, the drifting hero grid, and the code sample's typing caret. */
+  --animate-edge: edge-dash 3s linear infinite;
+  --animate-node: node-pulse 1.8s ease-in-out infinite;
+  --animate-ring: ring-out 2.4s ease-out infinite;
+  --animate-grid: grid-drift 24s linear infinite;
+  --animate-caret: caret-blink 1s steps(1) infinite;
 }
 
 :root {
@@ -167,6 +175,44 @@
 @keyframes toast-in {
   from { opacity: 0; transform: translateY(8px) scale(0.98); }
   to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes edge-dash {
+  to { stroke-dashoffset: -120; }
+}
+
+@keyframes node-pulse {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 1; }
+}
+
+@keyframes ring-out {
+  from { transform: scale(1); opacity: 0.5; }
+  to { transform: scale(2.6); opacity: 0; }
+}
+
+@keyframes grid-drift {
+  to { transform: translate3d(-56px, -56px, 0); }
+}
+
+@keyframes caret-blink {
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}
+
+/* Sections fade up as they enter the viewport. The class is added by script so
+   the content stays visible when JavaScript never runs. */
+@media (prefers-reduced-motion: no-preference) {
+  .reveal {
+    opacity: 0;
+    transform: translateY(14px);
+    transition: opacity 0.7s cubic-bezier(0.22, 0.61, 0.36, 1), transform 0.7s cubic-bezier(0.22, 0.61, 0.36, 1);
+  }
+
+  .reveal[data-shown="true"] {
+    opacity: 1;
+    transform: none;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
