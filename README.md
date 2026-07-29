@@ -2,9 +2,6 @@
   <img src="./assets/openai-gateway-logo.svg" alt="OpenAI Gateway logo" width="680">
 
   **One OpenAI-compatible endpoint for Codex, OpenCode Go, and xAI.**
-
-  [Portfolio](https://hetsaraiya.com/projects/openai-gateway) ·
-  [Spores](https://github.com/hetsaraiya/spores)
 </div>
 
 ## Overview
