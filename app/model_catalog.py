@@ -19,16 +19,16 @@ import httpx
 from .config import Settings
 from .credentials import CredentialError
 from .cursor_cli import cursor_models
-from .proxy import (
+from .constants import (
     CODEX_SUPPORTED_ENDPOINTS,
     OPENCODE_GO_CHAT_ENDPOINT,
     OPENCODE_GO_MESSAGES_ENDPOINT,
     OPENCODE_GO_MESSAGES_MODELS,
     OPENCODE_GO_MODEL_PREFIX,
-    build_codex_headers,
-    build_opencode_go_headers,
-    build_xai_headers,
 )
+from .providers.codex import build_codex_headers
+from .providers.opencode_go import build_opencode_go_headers
+from .providers.xai import build_xai_headers
 from .router import AccountRouter, NoAccountAvailable
 
 log = logging.getLogger("gateway.models")
