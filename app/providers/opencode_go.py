@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..constants import OPENCODE_GO_MODEL_PREFIX
+from ..constants import (
+    CHAT_API_SAFE_VARIABLES,
+    MESSAGES_API_SAFE_VARIABLES,
+    OPENCODE_GO_MODEL_PREFIX,
+)
 from .base import CompletionProvider, ProviderAccount
 
 
@@ -33,12 +37,16 @@ def build_opencode_go_messages_headers(account) -> dict[str, str]:
 class OpenCodeGoProvider(CompletionProvider):
     provider = "opencode-go"
     display_name = "OpenCode Go"
+    api_safe_variables = {
+        "/chat/completions": CHAT_API_SAFE_VARIABLES,
+        "/messages": MESSAGES_API_SAFE_VARIABLES,
+    }
 
     def url(self, path: str) -> str:
         return f"{self.settings.opencode_go_base_url}{path}"
 
-    def prepare_body(self, body: dict[str, Any]) -> dict[str, Any]:
-        prepared = dict(body)
+    def prepare_body(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
+        prepared = super().prepare_body(path, body)
         model = prepared.get("model")
         if is_opencode_go_model(model):
             prepared["model"] = strip_opencode_go_model(model)

@@ -1,5 +1,32 @@
 RETRYABLE_UPSTREAM_STATUSES = frozenset({429, 500, 502, 503, 504})
 
+CHAT_API_SAFE_VARIABLES = frozenset(
+    {
+        "max_completion_tokens",
+        "max_tokens",
+        "parallel_tool_calls",
+        "reasoning_effort",
+        "seed",
+        "stop",
+        "temperature",
+        "tool_choice",
+        "top_p",
+    }
+)
+RESPONSES_API_SAFE_VARIABLES = frozenset(
+    {
+        "max_output_tokens",
+        "parallel_tool_calls",
+        "reasoning",
+        "temperature",
+        "tool_choice",
+        "top_p",
+    }
+)
+MESSAGES_API_SAFE_VARIABLES = frozenset(
+    {"max_tokens", "stop_sequences", "temperature", "tool_choice", "top_k", "top_p"}
+)
+
 CODEX_SUPPORTED_ENDPOINTS = ("/v1/responses", "/v1/chat/completions")
 
 OPENCODE_GO_MODEL_PREFIX = "opencode-go/"

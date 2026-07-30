@@ -3,6 +3,7 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
+from ..constants import RESPONSES_API_SAFE_VARIABLES
 from ..credentials import CodexAccount
 from .base import CompletionProvider
 
@@ -27,6 +28,7 @@ class CodexProvider(CompletionProvider):
     provider = "codex"
     display_name = "Codex"
     retry_unauthorized = True
+    api_safe_variables = {"/responses": RESPONSES_API_SAFE_VARIABLES}
 
     def url(self, path: str) -> str:
         return f"{self.settings.codex_base_url}{path}"

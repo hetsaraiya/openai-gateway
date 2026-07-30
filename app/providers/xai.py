@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..constants import XAI_MODEL_PREFIX
+from ..constants import (
+    CHAT_API_SAFE_VARIABLES,
+    RESPONSES_API_SAFE_VARIABLES,
+    XAI_MODEL_PREFIX,
+)
 from .base import CompletionProvider, ProviderAccount
 
 
@@ -50,12 +54,16 @@ class XAIProvider(CompletionProvider):
     provider = "xai"
     display_name = "xAI"
     retry_unauthorized = True
+    api_safe_variables = {
+        "/chat/completions": CHAT_API_SAFE_VARIABLES,
+        "/responses": RESPONSES_API_SAFE_VARIABLES,
+    }
 
     def url(self, path: str) -> str:
         return f"{self.settings.xai_base_url}{path}"
 
-    def prepare_body(self, body: dict[str, Any]) -> dict[str, Any]:
-        prepared = dict(body)
+    def prepare_body(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
+        prepared = super().prepare_body(path, body)
         prepared["model"] = strip_xai_model(str(prepared.get("model") or ""))
         prepared.pop("prompt_cache_key", None)
         return prepared

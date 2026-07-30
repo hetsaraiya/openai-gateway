@@ -8,8 +8,10 @@ forwards requests to the ChatGPT Codex backend (Responses API).
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import json
+from dataclasses import dataclass, field
 from functools import lru_cache
+from typing import Any
 
 from decouple import config
 
@@ -61,6 +63,9 @@ class Settings:
     rate_limit_cooldown: int = 60
     request_timeout: float = 600.0
     max_account_attempts: int = 3
+    # Optional provider defaults applied only to explicitly allowlisted request
+    # variables. Per-request values always take precedence.
+    provider_safe_defaults: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     dedup_enabled: bool = True
     dedup_ttl: int = 600
@@ -78,6 +83,14 @@ def get_settings() -> Settings:
     master = config("GATEWAY_API_KEY", default="")
     if not master:
         raise RuntimeError("GATEWAY_API_KEY must be set (the master key clients use).")
+
+    provider_safe_defaults = config("PROVIDER_SAFE_DEFAULTS", default="{}")
+    try:
+        parsed_safe_defaults = json.loads(provider_safe_defaults)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("PROVIDER_SAFE_DEFAULTS must be valid JSON.") from exc
+    if not isinstance(parsed_safe_defaults, dict):
+        raise RuntimeError("PROVIDER_SAFE_DEFAULTS must be a JSON object.")
 
     return Settings(
         master_api_key=master,
@@ -112,6 +125,7 @@ def get_settings() -> Settings:
         rate_limit_cooldown=config("RATE_LIMIT_COOLDOWN", default=60, cast=int),
         request_timeout=config("REQUEST_TIMEOUT", default=600.0, cast=float),
         max_account_attempts=config("MAX_ACCOUNT_ATTEMPTS", default=3, cast=int),
+        provider_safe_defaults=parsed_safe_defaults,
         dedup_enabled=config("DEDUP_ENABLED", default=True, cast=bool),
         dedup_ttl=config("DEDUP_TTL", default=600, cast=int),
         default_model=config("DEFAULT_MODEL", default=""),

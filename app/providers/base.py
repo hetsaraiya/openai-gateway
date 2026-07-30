@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from abc import ABC, abstractmethod
-from typing import Any, Protocol
+from typing import Any, Mapping, Protocol
 
 import httpx
 
@@ -42,6 +42,7 @@ class CompletionProvider(ABC):
     provider: str
     display_name: str
     retry_unauthorized = False
+    api_safe_variables: Mapping[str, frozenset[str]] = {}
 
     def __init__(
         self,
@@ -60,7 +61,7 @@ class CompletionProvider(ABC):
         *,
         context: dict[str, Any] | None = None,
     ) -> tuple[object, httpx.Response]:
-        prepared_body = self.prepare_body(body)
+        prepared_body = self.prepare_body(path, body)
         candidates = await self.router.candidates(self.provider)
         last_error = "no attempts made"
 
@@ -128,8 +129,22 @@ class CompletionProvider(ABC):
             raise RuntimeError("provider request produced no response")
         return response
 
-    def prepare_body(self, body: dict[str, Any]) -> dict[str, Any]:
-        return dict(body)
+    def prepare_body(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
+        prepared = self.safe_defaults(path)
+        prepared.update(body)
+        return prepared
+
+    def safe_defaults(self, path: str) -> dict[str, Any]:
+        """Return allowlisted provider defaults safe to place in an API body."""
+        configured = self.settings.provider_safe_defaults.get(self.provider, {})
+        if not isinstance(configured, dict):
+            return {}
+        allowed = self.api_safe_variables.get(path, frozenset())
+        return {
+            key: value
+            for key, value in configured.items()
+            if key in allowed
+        }
 
     @abstractmethod
     def url(self, path: str) -> str:

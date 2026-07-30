@@ -20,6 +20,7 @@ def make_settings(strategy="fallback", **kw) -> Settings:
         strategy=strategy,
         rate_limit_cooldown=kw.get("rate_limit_cooldown", 60),
         max_account_attempts=kw.get("max_account_attempts", 3),
+        provider_safe_defaults=kw.get("provider_safe_defaults", {}),
         token_refresh_skew=kw.get("token_refresh_skew", 300),
         oauth_token_url=kw.get("oauth_token_url", "https://auth.test/oauth/token"),
         codex_base_url=kw.get("codex_base_url", "https://codex.test/backend"),
