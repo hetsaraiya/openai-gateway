@@ -28,6 +28,13 @@ from fastapi.staticfiles import StaticFiles
 from . import __version__
 from .auth import require_master_key
 from .config import get_settings
+from .constants import (
+    CODEX_SUPPORTED_ENDPOINTS,
+    OPENCODE_GO_CHAT_ENDPOINT,
+    OPENCODE_GO_MESSAGES_ENDPOINT,
+    OPENCODE_GO_MESSAGES_MODELS,
+    XAI_SUPPORTED_ENDPOINTS,
+)
 from .credentials import (
     CredentialError,
     delete_account_file,
@@ -54,23 +61,17 @@ from .models import (
     StatusResponse,
 )
 from .observability import configure_logging, log_access, new_request_id, request_id_var
-from .proxy import (
-    AllAccountsFailed,
-    CODEX_SUPPORTED_ENDPOINTS,
-    CodexProxy,
-    OPENCODE_GO_CHAT_ENDPOINT,
-    OPENCODE_GO_MESSAGES_ENDPOINT,
-    OPENCODE_GO_MESSAGES_MODELS,
-    OpenCodeGoProxy,
-    XAIProxy,
-    build_codex_headers,
+from .providers import AllAccountsFailed, CodexProvider, ProviderFactory
+from .providers.codex import build_codex_headers
+from .providers.opencode_go import (
     build_opencode_go_headers,
-    build_xai_headers,
     is_opencode_go_model,
-    is_xai_model,
     strip_opencode_go_model,
+)
+from .providers.xai import (
+    build_xai_headers,
+    is_xai_model,
     strip_xai_model,
-    XAI_SUPPORTED_ENDPOINTS,
 )
 from .quota import QuotaStore
 from .router import AccountRouter, NoAccountAvailable
@@ -99,9 +100,7 @@ async def lifespan(app: FastAPI):
     dedup = DedupStore(settings.redis_url, settings.dedup_ttl)
     router = AccountRouter(settings, accounts, quota)
     client = httpx.AsyncClient(http2=True, timeout=settings.request_timeout)
-    proxy = CodexProxy(settings, router, client)
-    opencode_go_proxy = OpenCodeGoProxy(settings, router, client)
-    xai_proxy = XAIProxy(settings, router, client)
+    providers = ProviderFactory.create(settings, router, client)
     catalog = ModelCatalog(settings, router, client)
     device_logins = DeviceLoginManager(settings, router)
     xai_logins = XAILoginManager(settings, router, client)
@@ -111,9 +110,10 @@ async def lifespan(app: FastAPI):
     app.state.router = router
     app.state.quota = quota
     app.state.dedup = dedup
-    app.state.proxy = proxy
-    app.state.opencode_go_proxy = opencode_go_proxy
-    app.state.xai_proxy = xai_proxy
+    app.state.providers = providers
+    app.state.proxy = providers.codex
+    app.state.opencode_go_proxy = providers.opencode_go
+    app.state.xai_proxy = providers.xai
     app.state.catalog = catalog
     app.state.device_logins = device_logins
     app.state.xai_logins = xai_logins
@@ -264,7 +264,7 @@ async def _passthrough_error(acct_id: str, upstream: httpx.Response) -> Response
     )
 
 
-async def _open(proxy: CodexProxy, responses_body: dict):
+async def _open(proxy: CodexProvider, responses_body: dict):
     """Open an upstream stream, mapping router errors to HTTP responses."""
     try:
         acct, upstream = await proxy.open_stream(responses_body)
