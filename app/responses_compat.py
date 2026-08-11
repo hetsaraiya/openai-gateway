@@ -1,8 +1,8 @@
-"""Compatibility adapters for serving Responses API over legacy model APIs.
+"""Protocol strategies for serving Responses over native and legacy APIs.
 
-OpenCode Go exposes some models through OpenAI Chat Completions and others
-through Anthropic Messages.  This module implements the common, portable
-subset of the Responses API on top of those two protocols.
+The adapters implement the common, portable Responses subset on top of native
+Responses, OpenAI-compatible Chat Completions, and Anthropic-compatible
+Messages transports.
 """
 
 from __future__ import annotations
@@ -10,7 +10,9 @@ from __future__ import annotations
 import json
 import time
 import uuid
+from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import AsyncIterator, Optional
 
 
@@ -19,6 +21,10 @@ class UnsupportedResponsesFeature(ValueError):
 
 
 STRUCTURED_OUTPUT_TOOL = "__gateway_structured_output"
+STRUCTURED_OUTPUT_INSTRUCTION = (
+    f"Return the final answer by calling the {STRUCTURED_OUTPUT_TOOL} tool exactly once "
+    "with arguments that match its JSON schema. Do not include prose outside the tool call."
+)
 
 
 def _id(prefix: str) -> str:
@@ -54,7 +60,7 @@ def _validate_portable(body: dict) -> None:
     if unsupported:
         names = ", ".join(sorted(set(unsupported)))
         raise UnsupportedResponsesFeature(
-            f"OpenCode Go compatibility mode cannot emulate: {names}"
+            f"Responses compatibility mode cannot emulate: {names}"
         )
 
 
@@ -143,8 +149,22 @@ def _messages_structured_tool(fmt: dict) -> dict:
     }
 
 
+def _append_instruction(current: object, instruction: str) -> str:
+    value = str(current).strip() if current else ""
+    return f"{value}\n\n{instruction}" if value else instruction
+
+
+def _add_chat_instruction(messages: list[dict], instruction: str) -> None:
+    if messages and messages[0].get("role") == "system":
+        messages[0]["content"] = _append_instruction(
+            messages[0].get("content"), instruction
+        )
+        return
+    messages.insert(0, {"role": "system", "content": instruction})
+
+
 def responses_to_native_structured_request(body: dict) -> dict:
-    """Emulate native Responses JSON formatting with a forced function tool."""
+    """Emulate unavailable native JSON formatting with an automatic function tool."""
     _validate_portable(body)
     fmt = structured_output_format(body)
     if fmt is None:
@@ -166,7 +186,12 @@ def responses_to_native_structured_request(body: dict) -> dict:
         "description": "Return the final answer as an object matching the supplied schema.",
         "parameters": _structured_schema(fmt),
     }]
-    out["tool_choice"] = {"type": "function", "name": STRUCTURED_OUTPUT_TOOL}
+    # Omitting tool_choice is equivalent to automatic selection and remains
+    # compatible with providers that prohibit forced tools while thinking.
+    out.pop("tool_choice", None)
+    out["instructions"] = _append_instruction(
+        out.get("instructions"), STRUCTURED_OUTPUT_INSTRUCTION
+    )
     return out
 
 
@@ -233,9 +258,8 @@ def responses_to_chat_request(body: dict, upstream_model: str) -> dict:
         out["tool_choice"] = _chat_tool_choice(body["tool_choice"])
     if structured:
         out["tools"] = [_chat_structured_tool(structured)]
-        out["tool_choice"] = {
-            "type": "function", "function": {"name": STRUCTURED_OUTPUT_TOOL},
-        }
+        out.pop("tool_choice", None)
+        _add_chat_instruction(messages, STRUCTURED_OUTPUT_INSTRUCTION)
     for source, target in (
         ("max_output_tokens", "max_tokens"),
         ("temperature", "temperature"),
@@ -364,7 +388,10 @@ def responses_to_messages_request(body: dict, upstream_model: str) -> dict:
             out["tool_choice"] = choice
     if structured:
         out["tools"] = [_messages_structured_tool(structured)]
-        out["tool_choice"] = {"type": "tool", "name": STRUCTURED_OUTPUT_TOOL}
+        out.pop("tool_choice", None)
+        out["system"] = _append_instruction(
+            out.get("system"), STRUCTURED_OUTPUT_INSTRUCTION
+        )
     for key in ("temperature", "top_p"):
         if key in body:
             out[key] = body[key]
@@ -841,3 +868,257 @@ async def native_structured_sse_to_responses_sse(
     for event in _complete_text_events(state, text):
         yield event
     yield state.complete(usage, incomplete_reason)
+
+
+class ResponsesUpstreamProtocol(str, Enum):
+    """Upstream inference protocols understood by the compatibility layer."""
+
+    NATIVE = "responses"
+    CHAT_COMPLETIONS = "chat_completions"
+    ANTHROPIC_MESSAGES = "anthropic_messages"
+    TEXT_GENERATION = "text_generation"
+
+
+@dataclass(frozen=True)
+class PreparedResponsesRequest:
+    """Translated request plus the state needed to translate its response."""
+
+    body: dict
+    structured_tool_name: Optional[str] = None
+
+    @property
+    def uses_structured_output_emulation(self) -> bool:
+        return self.structured_tool_name is not None
+
+
+class ResponsesProtocolAdapter(ABC):
+    """Strategy interface for exposing Responses over an upstream protocol."""
+
+    protocol: ResponsesUpstreamProtocol
+    native = False
+
+    @abstractmethod
+    def prepare_request(
+        self, body: dict, upstream_model: str
+    ) -> PreparedResponsesRequest:
+        """Translate a gateway Responses request into the upstream request."""
+
+    @abstractmethod
+    def translate_response(
+        self, payload: dict, gateway_model: str, prepared: PreparedResponsesRequest
+    ) -> dict:
+        """Translate one non-streaming upstream response into Responses format."""
+
+    @abstractmethod
+    async def translate_stream(
+        self,
+        events: AsyncIterator[dict],
+        gateway_model: str,
+        prepared: PreparedResponsesRequest,
+    ) -> AsyncIterator[bytes]:
+        """Translate parsed upstream events into typed Responses SSE events."""
+
+    def requires_response_translation(self, prepared: PreparedResponsesRequest) -> bool:
+        return not self.native or prepared.uses_structured_output_emulation
+
+
+class NativeResponsesAdapter(ResponsesProtocolAdapter):
+    """Native Responses strategy with structured-output fallback when required."""
+
+    protocol = ResponsesUpstreamProtocol.NATIVE
+    native = True
+
+    def prepare_request(
+        self, body: dict, upstream_model: str
+    ) -> PreparedResponsesRequest:
+        structured = structured_output_format(body)
+        translated = responses_to_native_structured_request(body) if structured else dict(body)
+        return PreparedResponsesRequest(
+            translated, STRUCTURED_OUTPUT_TOOL if structured else None
+        )
+
+    def translate_response(
+        self, payload: dict, gateway_model: str, prepared: PreparedResponsesRequest
+    ) -> dict:
+        if prepared.uses_structured_output_emulation:
+            return native_structured_response_to_text(payload)
+        return payload
+
+    async def translate_stream(
+        self,
+        events: AsyncIterator[dict],
+        gateway_model: str,
+        prepared: PreparedResponsesRequest,
+    ) -> AsyncIterator[bytes]:
+        if not prepared.uses_structured_output_emulation:
+            raise RuntimeError("native Responses streams should be passed through directly")
+        async for event in native_structured_sse_to_responses_sse(events, gateway_model):
+            yield event
+
+
+class ChatCompletionsResponsesAdapter(ResponsesProtocolAdapter):
+    """Responses strategy backed by OpenAI-compatible Chat Completions."""
+
+    protocol = ResponsesUpstreamProtocol.CHAT_COMPLETIONS
+
+    def prepare_request(
+        self, body: dict, upstream_model: str
+    ) -> PreparedResponsesRequest:
+        structured = structured_output_format(body)
+        return PreparedResponsesRequest(
+            responses_to_chat_request(body, upstream_model),
+            STRUCTURED_OUTPUT_TOOL if structured else None,
+        )
+
+    def translate_response(
+        self, payload: dict, gateway_model: str, prepared: PreparedResponsesRequest
+    ) -> dict:
+        return chat_response_to_response(
+            payload, gateway_model, prepared.structured_tool_name
+        )
+
+    async def translate_stream(
+        self,
+        events: AsyncIterator[dict],
+        gateway_model: str,
+        prepared: PreparedResponsesRequest,
+    ) -> AsyncIterator[bytes]:
+        async for event in chat_sse_to_responses_sse(
+            events, gateway_model, prepared.structured_tool_name
+        ):
+            yield event
+
+
+class AnthropicMessagesResponsesAdapter(ResponsesProtocolAdapter):
+    """Responses strategy backed by Anthropic-compatible Messages."""
+
+    protocol = ResponsesUpstreamProtocol.ANTHROPIC_MESSAGES
+
+    def prepare_request(
+        self, body: dict, upstream_model: str
+    ) -> PreparedResponsesRequest:
+        structured = structured_output_format(body)
+        return PreparedResponsesRequest(
+            responses_to_messages_request(body, upstream_model),
+            STRUCTURED_OUTPUT_TOOL if structured else None,
+        )
+
+    def translate_response(
+        self, payload: dict, gateway_model: str, prepared: PreparedResponsesRequest
+    ) -> dict:
+        return messages_response_to_response(
+            payload, gateway_model, prepared.structured_tool_name
+        )
+
+    async def translate_stream(
+        self,
+        events: AsyncIterator[dict],
+        gateway_model: str,
+        prepared: PreparedResponsesRequest,
+    ) -> AsyncIterator[bytes]:
+        async for event in messages_sse_to_responses_sse(
+            events, gateway_model, prepared.structured_tool_name
+        ):
+            yield event
+
+
+class TextGenerationResponsesAdapter(ResponsesProtocolAdapter):
+    """Limited Responses strategy for plain-text CLI or generation backends."""
+
+    protocol = ResponsesUpstreamProtocol.TEXT_GENERATION
+
+    def prepare_request(
+        self, body: dict, upstream_model: str
+    ) -> PreparedResponsesRequest:
+        _validate_portable(body)
+        if body.get("tools"):
+            raise UnsupportedResponsesFeature(
+                "plain-text backends cannot emulate function tools"
+            )
+        if structured_output_format(body):
+            raise UnsupportedResponsesFeature(
+                "plain-text backends cannot enforce structured output"
+            )
+        for item in _response_items(body):
+            if not isinstance(item, dict):
+                continue
+            kind = item.get("type", "message")
+            if kind == "reasoning":
+                continue
+            if kind != "message":
+                raise UnsupportedResponsesFeature(
+                    f"plain-text backends cannot emulate input item type: {kind}"
+                )
+            content = item.get("content")
+            for part in content if isinstance(content, list) else []:
+                if isinstance(part, dict) and part.get("type") not in {
+                    "text", "input_text", "output_text",
+                }:
+                    raise UnsupportedResponsesFeature(
+                        f"plain-text backends cannot emulate content part: {part.get('type')}"
+                    )
+        return PreparedResponsesRequest(dict(body))
+
+    def translate_response(
+        self, payload: dict, gateway_model: str, prepared: PreparedResponsesRequest
+    ) -> dict:
+        response = _base_response(gateway_model)
+        response["output"] = [_message_item(str(payload.get("result") or ""))]
+        raw_usage = payload.get("usage") or {}
+        response["usage"] = _usage(
+            raw_usage.get("input_tokens"), raw_usage.get("output_tokens")
+        )
+        return response
+
+    async def translate_stream(
+        self,
+        events: AsyncIterator[dict],
+        gateway_model: str,
+        prepared: PreparedResponsesRequest,
+    ) -> AsyncIterator[bytes]:
+        async def chat_events() -> AsyncIterator[dict]:
+            async for event in events:
+                if event.get("type") == "error":
+                    yield {"error": event.get("error") or event}
+                    return
+                if event.get("type") == "text_delta":
+                    yield {"choices": [{"delta": {"content": event.get("delta", "")}}]}
+            yield {"choices": [{"delta": {}, "finish_reason": "stop"}]}
+            yield {"__done__": True}
+
+        async for event in chat_sse_to_responses_sse(chat_events(), gateway_model):
+            yield event
+
+
+class ResponsesAdapterFactory:
+    """Registry-backed factory for protocol strategies.
+
+    New transports can be added without changing the route orchestration: add
+    an adapter implementation and register it here (or at application startup).
+    """
+
+    _registry: dict[ResponsesUpstreamProtocol, ResponsesProtocolAdapter] = {
+        adapter.protocol: adapter
+        for adapter in (
+            NativeResponsesAdapter(),
+            ChatCompletionsResponsesAdapter(),
+            AnthropicMessagesResponsesAdapter(),
+            TextGenerationResponsesAdapter(),
+        )
+    }
+
+    @classmethod
+    def register(cls, adapter: ResponsesProtocolAdapter) -> None:
+        cls._registry[adapter.protocol] = adapter
+
+    @classmethod
+    def create(
+        cls, protocol: ResponsesUpstreamProtocol | str
+    ) -> ResponsesProtocolAdapter:
+        try:
+            key = ResponsesUpstreamProtocol(protocol)
+            return cls._registry[key]
+        except (KeyError, ValueError) as exc:
+            raise UnsupportedResponsesFeature(
+                f"no Responses adapter is registered for upstream protocol: {protocol}"
+            ) from exc

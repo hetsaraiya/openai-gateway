@@ -253,7 +253,58 @@ async def test_responses_endpoint_emulates_unavailable_json_schema(monkeypatch):
 
     assert response.status_code == 200
     assert "response_format" not in seen["body"]
-    assert seen["body"]["tool_choice"]["function"]["name"] == "__gateway_structured_output"
+    assert "tool_choice" not in seen["body"]
+    assert "__gateway_structured_output" in seen["body"]["messages"][0]["content"]
+    assert response.json()["output"][0]["content"][0]["text"] == '{"name":"Ada"}'
+
+
+@pytest.mark.asyncio
+async def test_messages_responses_structured_output_supports_thinking_mode(monkeypatch):
+    settings = make_settings()
+    monkeypatch.setattr("app.auth.get_settings", lambda: settings)
+    seen = {}
+
+    class Proxy:
+        async def open_messages(self, body):
+            seen["body"] = body
+            return SimpleNamespace(id="go"), httpx.Response(200, json={
+                "id": "msg_go",
+                "type": "message",
+                "stop_reason": "tool_use",
+                "content": [{
+                    "type": "tool_use",
+                    "id": "toolu_1",
+                    "name": "__gateway_structured_output",
+                    "input": {"name": "Ada"},
+                }],
+                "usage": {"input_tokens": 2, "output_tokens": 1},
+            })
+
+    app.state.settings = settings
+    app.state.opencode_go_proxy = Proxy()
+    app.state.dedup = None
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/v1/responses",
+            headers={"X-Gateway-Key": "test-master"},
+            json={
+                "model": "opencode-go/qwen3.8-max",
+                "input": "Extract the name",
+                "reasoning": {"effort": "high"},
+                "text": {"format": {
+                    "type": "json_schema",
+                    "name": "profile",
+                    "schema": {"type": "object", "properties": {
+                        "name": {"type": "string"},
+                    }},
+                }},
+            },
+        )
+
+    assert response.status_code == 200
+    assert "tool_choice" not in seen["body"]
+    assert "__gateway_structured_output" in seen["body"]["system"]
     assert response.json()["output"][0]["content"][0]["text"] == '{"name":"Ada"}'
 
 
@@ -299,7 +350,8 @@ async def test_native_go_responses_also_emulates_unavailable_json_schema(monkeyp
 
     assert response.status_code == 200
     assert "format" not in seen["body"].get("text", {})
-    assert seen["body"]["tool_choice"]["name"] == "__gateway_structured_output"
+    assert "tool_choice" not in seen["body"]
+    assert "__gateway_structured_output" in seen["body"]["instructions"]
     assert response.json()["output"][0]["content"][0]["text"] == '{"name":"Ada"}'
 
 

@@ -160,14 +160,24 @@ and image or structured JSON features supported by the selected upstream are
 translated.
 
 Responses `text.format` requests using `json_schema` or `json_object` are
-emulated with a private forced function call for every OpenCode Go protocol,
-including models with a native Responses endpoint. This avoids depending on
-provider-specific `response_format` availability. The gateway converts the
-function arguments back into ordinary Responses `output_text`, so clients such
-as LangChain can keep using native structured-output mode. Combining this
-emulation with client-supplied function tools is not supported because the
-gateway cannot faithfully enforce a final schema while also allowing arbitrary
-tool selection through legacy upstream protocols.
+emulated with a private schema function tool for every OpenCode Go protocol,
+including models whose native Responses endpoint lacks that format. Tool
+selection is left automatic and reinforced with an explicit instruction, which
+keeps the fallback compatible with providers that prohibit forced tools while
+thinking mode is active. This avoids depending on provider-specific
+`response_format` availability. The gateway converts the function arguments
+back into ordinary Responses `output_text`, so clients such as LangChain can
+keep using native structured-output mode. Combining this emulation with
+client-supplied function tools is not supported because the gateway cannot
+faithfully enforce a final schema while also allowing arbitrary tool selection
+through legacy upstream protocols.
+
+The compatibility layer uses a strategy interface plus a registry-backed
+factory. Native Responses, Chat Completions, Anthropic Messages, and plain-text
+generation backends each have a separate adapter responsible for request
+conversion, non-streaming response conversion, and typed SSE conversion. Model
+routing selects a protocol rather than containing translation logic, so another
+non-native API can be supported by implementing and registering one adapter.
 
 The compatibility path is intentionally stateless. Features that require an
 OpenAI-hosted Responses runtime—such as `previous_response_id`, Conversations,

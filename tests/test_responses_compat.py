@@ -3,7 +3,15 @@ import json
 import pytest
 
 from app.responses_compat import (
+    AnthropicMessagesResponsesAdapter,
+    ChatCompletionsResponsesAdapter,
+    NativeResponsesAdapter,
+    ResponsesAdapterFactory,
+    ResponsesProtocolAdapter,
+    ResponsesUpstreamProtocol,
     STRUCTURED_OUTPUT_TOOL,
+    STRUCTURED_OUTPUT_INSTRUCTION,
+    TextGenerationResponsesAdapter,
     UnsupportedResponsesFeature,
     chat_response_to_response,
     chat_sse_to_responses_sse,
@@ -75,7 +83,7 @@ def test_responses_request_to_messages_preserves_tool_round_trip():
     assert out["max_tokens"] == 100
 
 
-def test_chat_structured_output_uses_forced_function_instead_of_response_format():
+def test_chat_structured_output_uses_thinking_compatible_automatic_tool():
     schema = {
         "type": "object",
         "properties": {"name": {"type": "string"}},
@@ -98,10 +106,11 @@ def test_chat_structured_output_uses_forced_function_instead_of_response_format(
             "parameters": schema,
         },
     }]
-    assert out["tool_choice"]["function"]["name"] == STRUCTURED_OUTPUT_TOOL
+    assert "tool_choice" not in out
+    assert STRUCTURED_OUTPUT_INSTRUCTION in out["messages"][0]["content"]
 
 
-def test_messages_structured_output_uses_forced_tool():
+def test_messages_structured_output_uses_thinking_compatible_automatic_tool():
     schema = {"type": "object", "properties": {"name": {"type": "string"}}}
     out = responses_to_messages_request({
         "input": "Extract the name",
@@ -110,10 +119,11 @@ def test_messages_structured_output_uses_forced_tool():
 
     assert out["tools"][0]["name"] == STRUCTURED_OUTPUT_TOOL
     assert out["tools"][0]["input_schema"] == schema
-    assert out["tool_choice"] == {"type": "tool", "name": STRUCTURED_OUTPUT_TOOL}
+    assert "tool_choice" not in out
+    assert STRUCTURED_OUTPUT_INSTRUCTION in out["system"]
 
 
-def test_native_responses_structured_output_uses_forced_function():
+def test_native_responses_structured_output_uses_automatic_function():
     schema = {"type": "object", "properties": {"name": {"type": "string"}}}
     out = responses_to_native_structured_request({
         "model": "opencode-go/gpt-5.6-luna",
@@ -126,7 +136,82 @@ def test_native_responses_structured_output_uses_forced_function():
     assert out["text"] == {"verbosity": "low"}
     assert out["tools"][0]["name"] == STRUCTURED_OUTPUT_TOOL
     assert out["tools"][0]["parameters"] == schema
-    assert out["tool_choice"] == {"type": "function", "name": STRUCTURED_OUTPUT_TOOL}
+    assert "tool_choice" not in out
+    assert STRUCTURED_OUTPUT_INSTRUCTION in out["instructions"]
+
+
+@pytest.mark.parametrize(
+    ("protocol", "adapter_type", "native"),
+    [
+        (ResponsesUpstreamProtocol.NATIVE, NativeResponsesAdapter, True),
+        (
+            ResponsesUpstreamProtocol.CHAT_COMPLETIONS,
+            ChatCompletionsResponsesAdapter,
+            False,
+        ),
+        (
+            ResponsesUpstreamProtocol.ANTHROPIC_MESSAGES,
+            AnthropicMessagesResponsesAdapter,
+            False,
+        ),
+        (
+            ResponsesUpstreamProtocol.TEXT_GENERATION,
+            TextGenerationResponsesAdapter,
+            False,
+        ),
+    ],
+)
+def test_adapter_factory_selects_protocol_strategy(protocol, adapter_type, native):
+    adapter = ResponsesAdapterFactory.create(protocol)
+
+    assert isinstance(adapter, ResponsesProtocolAdapter)
+    assert isinstance(adapter, adapter_type)
+    assert adapter.native is native
+
+
+def test_adapter_factory_rejects_unknown_protocol():
+    with pytest.raises(UnsupportedResponsesFeature, match="no Responses adapter"):
+        ResponsesAdapterFactory.create("unknown")
+
+
+def test_text_generation_adapter_returns_complete_responses_object():
+    adapter = ResponsesAdapterFactory.create(ResponsesUpstreamProtocol.TEXT_GENERATION)
+    prepared = adapter.prepare_request({"input": "Hello"}, "cursor-model")
+
+    out = adapter.translate_response({"result": "Hi"}, "cursor/model", prepared)
+
+    assert out["object"] == "response"
+    assert out["status"] == "completed"
+    assert out["output"][0]["content"][0]["text"] == "Hi"
+    assert out["usage"]["total_tokens"] == 0
+
+
+def test_text_generation_adapter_rejects_nonportable_features():
+    adapter = ResponsesAdapterFactory.create(ResponsesUpstreamProtocol.TEXT_GENERATION)
+
+    with pytest.raises(UnsupportedResponsesFeature, match="function tools"):
+        adapter.prepare_request({
+            "input": "Hello",
+            "tools": [{"type": "function", "name": "lookup", "parameters": {}}],
+        }, "cursor-model")
+
+
+@pytest.mark.asyncio
+async def test_text_generation_adapter_emits_full_responses_stream_lifecycle():
+    adapter = ResponsesAdapterFactory.create(ResponsesUpstreamProtocol.TEXT_GENERATION)
+    prepared = adapter.prepare_request({"input": "Hello", "stream": True}, "cursor-model")
+    events = [_event(raw) async for raw in adapter.translate_stream(
+        _aiter([
+            {"type": "text_delta", "delta": "Hel"},
+            {"type": "text_delta", "delta": "lo"},
+        ]),
+        "cursor/model",
+        prepared,
+    )]
+
+    assert events[0]["type"] == "response.created"
+    assert events[-1]["type"] == "response.completed"
+    assert events[-1]["response"]["output"][0]["content"][0]["text"] == "Hello"
 
 
 def test_rejects_stateful_and_hosted_tool_features():
