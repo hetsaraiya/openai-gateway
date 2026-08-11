@@ -39,6 +39,7 @@ flowchart LR
 ## Features
 
 - OpenAI-compatible `chat/completions`, `responses`, and model-list endpoints.
+- Responses API compatibility for every OpenCode Go model, including SSE and tools.
 - Anthropic-compatible `messages` requests for supported OpenCode Go models.
 - xAI Chat Completions and Responses with live language-model discovery.
 - xAI automatic prompt caching with conversation-key forwarding.
@@ -59,7 +60,7 @@ flowchart LR
 | `GET` | `/healthz` | Liveness and dependency health |
 | `GET` | `/v1/models` | Models available across configured providers |
 | `POST` | `/v1/chat/completions` | OpenAI-compatible chat completions |
-| `POST` | `/v1/responses` | Responses API passthrough |
+| `POST` | `/v1/responses` | Native or translated Responses API |
 | `POST` | `/v1/messages` | Anthropic-compatible OpenCode Go requests |
 | `GET` | `/` | Public landing page |
 | `GET` | `/dashboard` | Browser-based gateway dashboard |
@@ -148,6 +149,28 @@ Query `GET /v1/models` to use model IDs actually available to the configured
 accounts. OpenCode Go models use the `opencode-go/<model-id>` prefix at the
 gateway boundary; xAI models use `xai/<model-id>` and Cursor subscription
 models use `cursor/<model-id>`.
+
+### OpenCode Go Responses compatibility
+
+Every `opencode-go/<model-id>` can be called through `/v1/responses`. The
+gateway passes models with a native Responses endpoint through unchanged and
+adapts the remaining models to their documented Chat Completions or Anthropic
+Messages endpoint. Text, streaming, function tools, tool outputs, token usage,
+and image or structured JSON features supported by the selected upstream are
+translated.
+
+The compatibility path is intentionally stateless. Features that require an
+OpenAI-hosted Responses runtime—such as `previous_response_id`, Conversations,
+background mode, web search, file search, and computer use—return an
+`unsupported_feature` error instead of being silently ignored. Encrypted
+reasoning items cannot be produced by legacy upstream protocols.
+
+```bash
+curl http://localhost:8000/v1/responses \
+  -H "Authorization: Bearer $GATEWAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"opencode-go/glm-5.2","input":"Explain this repository briefly"}'
+```
 
 ### xAI prompt caching
 

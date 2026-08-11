@@ -25,6 +25,8 @@ from .proxy import (
     OPENCODE_GO_MESSAGES_ENDPOINT,
     OPENCODE_GO_MESSAGES_MODELS,
     OPENCODE_GO_MODEL_PREFIX,
+    OPENCODE_GO_RESPONSES_ENDPOINT,
+    OPENCODE_GO_RESPONSES_MODELS,
     build_codex_headers,
     build_opencode_go_headers,
     build_xai_headers,
@@ -238,7 +240,9 @@ class ModelCatalog:
     def _opencode_to_openai(m: dict) -> dict:
         model_id = m.get("id") or m.get("slug")
         endpoint = (
-            OPENCODE_GO_MESSAGES_ENDPOINT
+            OPENCODE_GO_RESPONSES_ENDPOINT
+            if model_id in OPENCODE_GO_RESPONSES_MODELS
+            else OPENCODE_GO_MESSAGES_ENDPOINT
             if model_id in OPENCODE_GO_MESSAGES_MODELS
             else OPENCODE_GO_CHAT_ENDPOINT
         )
@@ -252,7 +256,7 @@ class ModelCatalog:
             "context_window": m.get("context_window"),
             "supported_in_api": True,
             "gateway": "opencode-go",
-            "supported_endpoints": [endpoint],
+            "supported_endpoints": sorted({endpoint, OPENCODE_GO_RESPONSES_ENDPOINT}),
         }
 
     async def _xai_models(self) -> list[dict]:

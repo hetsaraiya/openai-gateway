@@ -53,13 +53,15 @@ async def test_dashboard_data_has_json_safe_provider_and_endpoint_rows(tmp_path,
         {"id": "go", "provider": "opencode-go", "plan": "opencode-go", "active": True, "used_today": 0},
     ]
     assert payload["models"][0]["supported_endpoints"] == ["/v1/responses", "/v1/chat/completions"]
-    assert payload["models"][1]["supported_endpoints"] == ["/v1/chat/completions"]
-    assert payload["models"][2]["supported_endpoints"] == ["/v1/messages"]
+    assert payload["models"][1]["supported_endpoints"] == [
+        "/v1/chat/completions", "/v1/responses",
+    ]
+    assert payload["models"][2]["supported_endpoints"] == ["/v1/messages", "/v1/responses"]
     assert payload["providers"] == [
         {"id": "codex", "accounts": 1, "active_accounts": 1,
          "supported_endpoints": ["/v1/chat/completions", "/v1/responses"]},
         {"id": "opencode-go", "accounts": 1, "active_accounts": 1,
-         "supported_endpoints": ["/v1/chat/completions", "/v1/messages"]},
+         "supported_endpoints": ["/v1/chat/completions", "/v1/messages", "/v1/responses"]},
     ]
 
 

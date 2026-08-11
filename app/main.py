@@ -1,9 +1,9 @@
 """FastAPI application — the gateway entrypoint.
 
-Exposes two OpenAI-compatible surfaces backed by ChatGPT Codex subscription
+Exposes two OpenAI-compatible surfaces backed by configured subscription
 accounts (``auth/*.json``):
 
-  * ``POST /v1/responses``         — near-verbatim passthrough to the Codex backend
+  * ``POST /v1/responses``         — native proxy or provider compatibility adapter
   * ``POST /v1/chat/completions``  — translated to/from the Responses API
 
 plus ``/v1/models``, ``/healthz`` and ``/admin/status``. Point any OpenAI SDK at
@@ -17,7 +17,7 @@ import logging
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Optional
 from uuid import uuid4
 
 import httpx
@@ -61,6 +61,8 @@ from .proxy import (
     OPENCODE_GO_CHAT_ENDPOINT,
     OPENCODE_GO_MESSAGES_ENDPOINT,
     OPENCODE_GO_MESSAGES_MODELS,
+    OPENCODE_GO_RESPONSES_ENDPOINT,
+    OPENCODE_GO_RESPONSES_MODELS,
     OpenCodeGoProxy,
     XAIProxy,
     build_codex_headers,
@@ -73,6 +75,15 @@ from .proxy import (
     XAI_SUPPORTED_ENDPOINTS,
 )
 from .quota import QuotaStore
+from .responses_compat import (
+    UnsupportedResponsesFeature,
+    chat_response_to_response,
+    chat_sse_to_responses_sse,
+    messages_response_to_response,
+    messages_sse_to_responses_sse,
+    responses_to_chat_request,
+    responses_to_messages_request,
+)
 from .router import AccountRouter, NoAccountAvailable
 from .translate import (
     UpstreamError,
@@ -602,7 +613,12 @@ def _dashboard_model(model: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(endpoints, list) or not all(isinstance(item, str) for item in endpoints):
         if provider == "opencode-go":
             upstream_id = strip_opencode_go_model(model_id) if is_opencode_go_model(model_id) else model_id
-            endpoints = [OPENCODE_GO_MESSAGES_ENDPOINT if upstream_id in OPENCODE_GO_MESSAGES_MODELS else OPENCODE_GO_CHAT_ENDPOINT]
+            native = (
+                OPENCODE_GO_RESPONSES_ENDPOINT if upstream_id in OPENCODE_GO_RESPONSES_MODELS
+                else OPENCODE_GO_MESSAGES_ENDPOINT if upstream_id in OPENCODE_GO_MESSAGES_MODELS
+                else OPENCODE_GO_CHAT_ENDPOINT
+            )
+            endpoints = sorted({native, OPENCODE_GO_RESPONSES_ENDPOINT})
         elif provider == "xai":
             endpoints = list(XAI_SUPPORTED_ENDPOINTS if provider == "xai" else CODEX_SUPPORTED_ENDPOINTS)
         else:
@@ -626,7 +642,11 @@ def _dashboard_providers(gateways: list[dict[str, Any]], models: list[dict[str, 
         elif provider == "opencode-go":
             # Go's documented API is split by model family; individual model
             # rows below identify the exact endpoint to call.
-            row["supported_endpoints"].update((OPENCODE_GO_CHAT_ENDPOINT, OPENCODE_GO_MESSAGES_ENDPOINT))
+            row["supported_endpoints"].update((
+                OPENCODE_GO_CHAT_ENDPOINT,
+                OPENCODE_GO_MESSAGES_ENDPOINT,
+                OPENCODE_GO_RESPONSES_ENDPOINT,
+            ))
         elif provider == "xai":
             row["supported_endpoints"].update(XAI_SUPPORTED_ENDPOINTS)
         elif provider == "cursor":
@@ -747,12 +767,7 @@ async def responses(request: Request, payload: ResponsesRequest) -> Response:
     s = request.app.state
     rbody = payload.model_dump(exclude_unset=True)
     if is_opencode_go_model(rbody.get("model")):
-        return _error(
-            400,
-            "OpenCode Go models support /v1/chat/completions through this gateway",
-            "unsupported_endpoint",
-            "invalid_request_error",
-        )
+        return await _serve_opencode_go_responses(request, s, rbody)
     if is_xai_model(rbody.get("model")):
         return await _serve_xai_responses(request, s, rbody)
     if str(rbody.get("model") or "").startswith("cursor/"):
@@ -812,6 +827,66 @@ async def _serve_opencode_go_chat(
                                  headers={"X-Gateway-Account": acct.id})
 
     return await _serve_opencode_go_nonstream(request, s, body)
+
+
+async def _serve_opencode_go_responses(request: Request, s, body: dict) -> Response:
+    """Serve Responses natively or adapt it to an OpenCode Go model protocol."""
+    gateway_model = str(body.get("model") or "")
+    upstream_model = strip_opencode_go_model(gateway_model)
+
+    if upstream_model in OPENCODE_GO_RESPONSES_MODELS:
+        async def open_native():
+            return await s.opencode_go_proxy.open_responses(body)
+
+        if body.get("stream"):
+            return await _serve_direct_stream(open_native)
+        return await _serve_direct_nonstream(request, s, open_native)
+
+    try:
+        if upstream_model in OPENCODE_GO_MESSAGES_MODELS:
+            upstream_body = responses_to_messages_request(body, upstream_model)
+
+            async def open_upstream():
+                return await s.opencode_go_proxy.open_messages(upstream_body)
+
+            adapter = messages_sse_to_responses_sse
+            transform = lambda raw: json.dumps(messages_response_to_response(
+                json.loads(raw), gateway_model
+            )).encode()
+        else:
+            upstream_body = responses_to_chat_request(body, upstream_model)
+
+            async def open_upstream():
+                return await s.opencode_go_proxy.open_chat(upstream_body)
+
+            adapter = chat_sse_to_responses_sse
+            transform = lambda raw: json.dumps(chat_response_to_response(
+                json.loads(raw), gateway_model
+            )).encode()
+    except UnsupportedResponsesFeature as exc:
+        return _error(400, str(exc), "unsupported_feature", "invalid_request_error")
+
+    if body.get("stream"):
+        try:
+            acct, upstream = await open_upstream()
+        except NoAccountAvailable as exc:
+            return _error(503, str(exc), "no_account_available")
+        except AllAccountsFailed as exc:
+            return _error(exc.status_code, exc.detail, "upstream_unavailable")
+        if upstream.status_code >= 400:
+            return await _passthrough_error(acct.id, upstream)
+
+        async def gen():
+            try:
+                async for event in adapter(iter_sse(upstream.aiter_bytes()), gateway_model):
+                    yield event
+            finally:
+                await upstream.aclose()
+
+        return StreamingResponse(gen(), media_type="text/event-stream",
+                                 headers={"X-Gateway-Account": acct.id})
+
+    return await _serve_direct_nonstream(request, s, open_upstream, transform=transform)
 
 
 async def _serve_xai_chat(
@@ -1000,7 +1075,12 @@ async def _serve_direct_stream(open_upstream: Callable) -> Response:
     )
 
 
-async def _serve_direct_nonstream(request: Request, s, open_upstream: Callable) -> Response:
+async def _serve_direct_nonstream(
+    request: Request,
+    s,
+    open_upstream: Callable,
+    transform: Optional[Callable[[bytes], bytes]] = None,
+) -> Response:
     dedup: DedupStore = s.dedup
     idem_key = request.headers.get("idempotency-key")
     use_dedup = s.settings.dedup_enabled and bool(idem_key)
@@ -1041,6 +1121,14 @@ async def _serve_direct_nonstream(request: Request, s, open_upstream: Callable) 
         if use_dedup:
             await dedup.release(idem_key)
         return Response(content=content, status_code=status_code, media_type=media_type, headers=headers)
+    if transform is not None:
+        try:
+            content = transform(content)
+            media_type = "application/json"
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+            if use_dedup:
+                await dedup.release(idem_key)
+            return _error(502, f"could not translate upstream response: {exc}", "upstream_error")
     if use_dedup:
         await dedup.complete(idem_key, status_code, content, acct.id)
     return Response(content=content, status_code=status_code, media_type=media_type, headers=headers)

@@ -26,14 +26,16 @@ _RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 OPENCODE_GO_MODEL_PREFIX = "opencode-go/"
 XAI_MODEL_PREFIX = "xai/"
 
-# OpenCode Go publishes two model-specific inference surfaces.  Keep this
+# OpenCode Go publishes model-specific inference surfaces. Keep this
 # mapping here so routing and the dashboard describe the same capability.
 CODEX_SUPPORTED_ENDPOINTS = ("/v1/responses", "/v1/chat/completions")
 OPENCODE_GO_CHAT_ENDPOINT = "/v1/chat/completions"
 OPENCODE_GO_MESSAGES_ENDPOINT = "/v1/messages"
+OPENCODE_GO_RESPONSES_ENDPOINT = "/v1/responses"
+OPENCODE_GO_RESPONSES_MODELS = frozenset({"gpt-5.6-luna"})
 OPENCODE_GO_MESSAGES_MODELS = frozenset({
     "minimax-m3", "minimax-m2.7", "minimax-m2.5",
-    "qwen3.7-max", "qwen3.7-plus", "qwen3.6-plus",
+    "qwen3.8-max", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-plus",
 })
 XAI_SUPPORTED_ENDPOINTS = ("/v1/chat/completions", "/v1/responses")
 
@@ -251,6 +253,42 @@ class OpenCodeGoProxy:
             return acct, resp
 
         raise AllAccountsFailed(f"all OpenCode Go attempts failed ({last_error})")
+
+    async def open_responses(self, responses_body: dict) -> tuple[object, httpx.Response]:
+        """Open a native Responses request for supported OpenCode Go models."""
+        body = dict(responses_body)
+        model = body.get("model")
+        if is_opencode_go_model(model):
+            body["model"] = strip_opencode_go_model(model)
+
+        url = f"{self._settings.opencode_go_base_url}/responses"
+        candidates = await self._router.candidates("opencode-go")
+        last_error = "no attempts made"
+        for acct in candidates:
+            try:
+                await acct.ensure_fresh(self._client)
+                req = self._client.build_request(
+                    "POST", url,
+                    headers=build_opencode_go_headers(acct, bool(body.get("stream"))),
+                    json=body, timeout=self._settings.request_timeout,
+                )
+                resp = await self._client.send(req, stream=True)
+            except (CredentialError, httpx.ConnectError, httpx.ReadTimeout, httpx.RemoteProtocolError) as exc:
+                last_error = f"{acct.id}: {exc}"
+                log.warning("OpenCode Go Responses request failed on %s: %s", acct.id, exc)
+                continue
+
+            if resp.status_code in _RETRYABLE_STATUS:
+                if resp.status_code == 429:
+                    await self._router.record_rate_limited(acct, self._retry_after(resp))
+                last_error = f"{acct.id}: HTTP {resp.status_code}"
+                await resp.aclose()
+                continue
+
+            await self._router.record_success(acct)
+            return acct, resp
+
+        raise AllAccountsFailed(f"all OpenCode Go Responses attempts failed ({last_error})")
 
     async def open_messages(self, messages_body: dict) -> tuple[object, httpx.Response]:
         """Open an Anthropic Messages request for an OpenCode Go model."""

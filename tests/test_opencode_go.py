@@ -1,4 +1,5 @@
 import json
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -146,6 +147,105 @@ async def test_opencode_go_messages_uses_anthropic_headers(quota):
 
 
 @pytest.mark.asyncio
+async def test_opencode_go_native_responses_uses_responses_endpoint(quota):
+    settings = make_settings()
+    account = OpenCodeGoAccount(None, {"api_key": "go_test_123456"}, settings, "go")
+    router = AccountRouter(settings, [account], quota)
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["url"] = str(request.url)
+        seen["json"] = json.loads(request.content)
+        return httpx.Response(200, json={"id": "resp_go", "object": "response"})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    proxy = OpenCodeGoProxy(settings, router, client)
+    try:
+        _, response = await proxy.open_responses({
+            "model": "opencode-go/gpt-5.6-luna", "input": "hi",
+        })
+        assert seen["url"] == "https://go.test/v1/responses"
+        assert seen["json"]["model"] == "gpt-5.6-luna"
+        await response.aclose()
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_responses_endpoint_translates_for_chat_only_go_model(monkeypatch):
+    settings = make_settings()
+    monkeypatch.setattr("app.auth.get_settings", lambda: settings)
+    seen = {}
+
+    class Proxy:
+        async def open_chat(self, body):
+            seen["body"] = body
+            return SimpleNamespace(id="go"), httpx.Response(200, json={
+                "id": "chatcmpl_go",
+                "choices": [{"message": {"role": "assistant", "content": "ok"},
+                             "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 2, "completion_tokens": 1},
+            })
+
+    app.state.settings = settings
+    app.state.opencode_go_proxy = Proxy()
+    app.state.dedup = None
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/v1/responses",
+            headers={"X-Gateway-Key": "test-master"},
+            json={"model": "opencode-go/glm-5.2", "input": "hello"},
+        )
+
+    assert response.status_code == 200
+    assert seen["body"]["model"] == "glm-5.2"
+    assert seen["body"]["messages"] == [{"role": "user", "content": "hello"}]
+    assert response.json()["object"] == "response"
+    assert response.json()["output"][0]["content"][0]["text"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_responses_endpoint_translates_chat_stream_to_responses_events(monkeypatch):
+    settings = make_settings()
+    monkeypatch.setattr("app.auth.get_settings", lambda: settings)
+
+    class Proxy:
+        async def open_chat(self, body):
+            chunks = [
+                {"choices": [{"delta": {"role": "assistant", "content": "ok"},
+                              "finish_reason": "stop"}]},
+                {"choices": [], "usage": {"prompt_tokens": 2, "completion_tokens": 1}},
+            ]
+            content = b"".join(
+                b"data: " + json.dumps(chunk).encode() + b"\n\n" for chunk in chunks
+            ) + b"data: [DONE]\n\n"
+            return SimpleNamespace(id="go"), httpx.Response(
+                200, content=content, headers={"content-type": "text/event-stream"}
+            )
+
+    app.state.settings = settings
+    app.state.opencode_go_proxy = Proxy()
+    app.state.dedup = None
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/v1/responses",
+            headers={"X-Gateway-Key": "test-master"},
+            json={"model": "opencode-go/glm-5.2", "input": "hello", "stream": True},
+        )
+
+    assert response.status_code == 200
+    events = [
+        json.loads(block.removeprefix("data: "))
+        for block in response.text.strip().split("\n\n")
+    ]
+    assert events[0]["type"] == "response.created"
+    assert events[-1]["type"] == "response.completed"
+    assert events[-1]["response"]["output"][0]["content"][0]["text"] == "ok"
+
+
+@pytest.mark.asyncio
 async def test_model_catalog_includes_opencode_go_models(tmp_path, quota):
     settings = make_settings()
     codex = make_account(tmp_path, "codex", settings=settings)
@@ -172,5 +272,8 @@ async def test_model_catalog_includes_opencode_go_models(tmp_path, quota):
         out = await catalog.openai_list()
         ids = [m["id"] for m in out["data"]]
         assert ids == ["gpt-5.5", "opencode-go/glm-5.2"]
+        assert out["data"][1]["supported_endpoints"] == [
+            "/v1/chat/completions", "/v1/responses",
+        ]
     finally:
         await client.aclose()
