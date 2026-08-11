@@ -76,13 +76,18 @@ from .proxy import (
 )
 from .quota import QuotaStore
 from .responses_compat import (
+    STRUCTURED_OUTPUT_TOOL,
     UnsupportedResponsesFeature,
     chat_response_to_response,
     chat_sse_to_responses_sse,
     messages_response_to_response,
     messages_sse_to_responses_sse,
+    native_structured_response_to_text,
+    native_structured_sse_to_responses_sse,
     responses_to_chat_request,
     responses_to_messages_request,
+    responses_to_native_structured_request,
+    structured_output_format,
 )
 from .router import AccountRouter, NoAccountAvailable
 from .translate import (
@@ -833,14 +838,52 @@ async def _serve_opencode_go_responses(request: Request, s, body: dict) -> Respo
     """Serve Responses natively or adapt it to an OpenCode Go model protocol."""
     gateway_model = str(body.get("model") or "")
     upstream_model = strip_opencode_go_model(gateway_model)
+    structured_tool = (
+        STRUCTURED_OUTPUT_TOOL if structured_output_format(body) else None
+    )
 
     if upstream_model in OPENCODE_GO_RESPONSES_MODELS:
+        try:
+            upstream_body = (
+                responses_to_native_structured_request(body) if structured_tool else body
+            )
+        except UnsupportedResponsesFeature as exc:
+            return _error(400, str(exc), "unsupported_feature", "invalid_request_error")
+
         async def open_native():
-            return await s.opencode_go_proxy.open_responses(body)
+            return await s.opencode_go_proxy.open_responses(upstream_body)
 
         if body.get("stream"):
+            if structured_tool:
+                try:
+                    acct, upstream = await open_native()
+                except NoAccountAvailable as exc:
+                    return _error(503, str(exc), "no_account_available")
+                except AllAccountsFailed as exc:
+                    return _error(exc.status_code, exc.detail, "upstream_unavailable")
+                if upstream.status_code >= 400:
+                    return await _passthrough_error(acct.id, upstream)
+
+                async def gen_native_structured():
+                    try:
+                        async for event in native_structured_sse_to_responses_sse(
+                            iter_sse(upstream.aiter_bytes()), gateway_model
+                        ):
+                            yield event
+                    finally:
+                        await upstream.aclose()
+
+                return StreamingResponse(
+                    gen_native_structured(), media_type="text/event-stream",
+                    headers={"X-Gateway-Account": acct.id},
+                )
             return await _serve_direct_stream(open_native)
-        return await _serve_direct_nonstream(request, s, open_native)
+        transform = None
+        if structured_tool:
+            transform = lambda raw: json.dumps(native_structured_response_to_text(
+                json.loads(raw)
+            )).encode()
+        return await _serve_direct_nonstream(request, s, open_native, transform=transform)
 
     try:
         if upstream_model in OPENCODE_GO_MESSAGES_MODELS:
@@ -851,7 +894,7 @@ async def _serve_opencode_go_responses(request: Request, s, body: dict) -> Respo
 
             adapter = messages_sse_to_responses_sse
             transform = lambda raw: json.dumps(messages_response_to_response(
-                json.loads(raw), gateway_model
+                json.loads(raw), gateway_model, structured_tool
             )).encode()
         else:
             upstream_body = responses_to_chat_request(body, upstream_model)
@@ -861,7 +904,7 @@ async def _serve_opencode_go_responses(request: Request, s, body: dict) -> Respo
 
             adapter = chat_sse_to_responses_sse
             transform = lambda raw: json.dumps(chat_response_to_response(
-                json.loads(raw), gateway_model
+                json.loads(raw), gateway_model, structured_tool
             )).encode()
     except UnsupportedResponsesFeature as exc:
         return _error(400, str(exc), "unsupported_feature", "invalid_request_error")
@@ -878,7 +921,9 @@ async def _serve_opencode_go_responses(request: Request, s, body: dict) -> Respo
 
         async def gen():
             try:
-                async for event in adapter(iter_sse(upstream.aiter_bytes()), gateway_model):
+                async for event in adapter(
+                    iter_sse(upstream.aiter_bytes()), gateway_model, structured_tool
+                ):
                     yield event
             finally:
                 await upstream.aclose()

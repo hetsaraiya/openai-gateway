@@ -206,6 +206,104 @@ async def test_responses_endpoint_translates_for_chat_only_go_model(monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_responses_endpoint_emulates_unavailable_json_schema(monkeypatch):
+    settings = make_settings()
+    monkeypatch.setattr("app.auth.get_settings", lambda: settings)
+    seen = {}
+
+    class Proxy:
+        async def open_chat(self, body):
+            seen["body"] = body
+            return SimpleNamespace(id="go"), httpx.Response(200, json={
+                "id": "chatcmpl_go",
+                "choices": [{"message": {
+                    "role": "assistant", "content": None, "tool_calls": [{
+                        "id": "call_1", "type": "function", "function": {
+                            "name": "__gateway_structured_output",
+                            "arguments": '{"name":"Ada"}',
+                        },
+                    }],
+                }, "finish_reason": "tool_calls"}],
+                "usage": {"prompt_tokens": 2, "completion_tokens": 1},
+            })
+
+    app.state.settings = settings
+    app.state.opencode_go_proxy = Proxy()
+    app.state.dedup = None
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/v1/responses",
+            headers={"X-Gateway-Key": "test-master"},
+            json={
+                "model": "opencode-go/glm-5.2",
+                "input": "Extract the name",
+                "text": {"format": {
+                    "type": "json_schema",
+                    "name": "profile",
+                    "schema": {
+                        "type": "object",
+                        "properties": {"name": {"type": "string"}},
+                        "required": ["name"],
+                    },
+                    "strict": True,
+                }},
+            },
+        )
+
+    assert response.status_code == 200
+    assert "response_format" not in seen["body"]
+    assert seen["body"]["tool_choice"]["function"]["name"] == "__gateway_structured_output"
+    assert response.json()["output"][0]["content"][0]["text"] == '{"name":"Ada"}'
+
+
+@pytest.mark.asyncio
+async def test_native_go_responses_also_emulates_unavailable_json_schema(monkeypatch):
+    settings = make_settings()
+    monkeypatch.setattr("app.auth.get_settings", lambda: settings)
+    seen = {}
+
+    class Proxy:
+        async def open_responses(self, body):
+            seen["body"] = body
+            return SimpleNamespace(id="go"), httpx.Response(200, json={
+                "id": "resp_go", "object": "response", "status": "completed",
+                "model": "gpt-5.6-luna",
+                "output": [{
+                    "id": "fc_1", "type": "function_call",
+                    "name": "__gateway_structured_output", "call_id": "call_1",
+                    "arguments": '{"name":"Ada"}', "status": "completed",
+                }],
+                "usage": {"input_tokens": 2, "output_tokens": 1, "total_tokens": 3},
+            })
+
+    app.state.settings = settings
+    app.state.opencode_go_proxy = Proxy()
+    app.state.dedup = None
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/v1/responses",
+            headers={"X-Gateway-Key": "test-master"},
+            json={
+                "model": "opencode-go/gpt-5.6-luna",
+                "input": "Extract the name",
+                "text": {"format": {
+                    "type": "json_schema", "name": "profile",
+                    "schema": {"type": "object", "properties": {
+                        "name": {"type": "string"},
+                    }},
+                }},
+            },
+        )
+
+    assert response.status_code == 200
+    assert "format" not in seen["body"].get("text", {})
+    assert seen["body"]["tool_choice"]["name"] == "__gateway_structured_output"
+    assert response.json()["output"][0]["content"][0]["text"] == '{"name":"Ada"}'
+
+
+@pytest.mark.asyncio
 async def test_responses_endpoint_translates_chat_stream_to_responses_events(monkeypatch):
     settings = make_settings()
     monkeypatch.setattr("app.auth.get_settings", lambda: settings)

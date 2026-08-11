@@ -18,6 +18,9 @@ class UnsupportedResponsesFeature(ValueError):
     """A Responses feature cannot be represented by the selected upstream."""
 
 
+STRUCTURED_OUTPUT_TOOL = "__gateway_structured_output"
+
+
 def _id(prefix: str) -> str:
     return prefix + uuid.uuid4().hex[:24]
 
@@ -103,6 +106,70 @@ def _chat_tool_choice(choice):
     return choice
 
 
+def structured_output_format(body: dict) -> Optional[dict]:
+    """Return a Responses JSON output format that needs legacy emulation."""
+    text = body.get("text") or {}
+    fmt = text.get("format") if isinstance(text, dict) else None
+    if isinstance(fmt, dict) and fmt.get("type") in {"json_schema", "json_object"}:
+        return fmt
+    return None
+
+
+def _structured_schema(fmt: dict) -> dict:
+    if fmt.get("type") == "json_schema":
+        schema = fmt.get("schema")
+        if not isinstance(schema, dict):
+            raise UnsupportedResponsesFeature("text.format.schema must be a JSON Schema object")
+        return schema
+    return {"type": "object", "additionalProperties": True}
+
+
+def _chat_structured_tool(fmt: dict) -> dict:
+    return {
+        "type": "function",
+        "function": {
+            "name": STRUCTURED_OUTPUT_TOOL,
+            "description": "Return the final answer as an object matching the supplied schema.",
+            "parameters": _structured_schema(fmt),
+        },
+    }
+
+
+def _messages_structured_tool(fmt: dict) -> dict:
+    return {
+        "name": STRUCTURED_OUTPUT_TOOL,
+        "description": "Return the final answer as an object matching the supplied schema.",
+        "input_schema": _structured_schema(fmt),
+    }
+
+
+def responses_to_native_structured_request(body: dict) -> dict:
+    """Emulate native Responses JSON formatting with a forced function tool."""
+    _validate_portable(body)
+    fmt = structured_output_format(body)
+    if fmt is None:
+        return dict(body)
+    if body.get("tools"):
+        raise UnsupportedResponsesFeature(
+            "structured-output emulation cannot be combined with client function tools"
+        )
+    out = dict(body)
+    text = dict(out.get("text") or {})
+    text.pop("format", None)
+    if text:
+        out["text"] = text
+    else:
+        out.pop("text", None)
+    out["tools"] = [{
+        "type": "function",
+        "name": STRUCTURED_OUTPUT_TOOL,
+        "description": "Return the final answer as an object matching the supplied schema.",
+        "parameters": _structured_schema(fmt),
+    }]
+    out["tool_choice"] = {"type": "function", "name": STRUCTURED_OUTPUT_TOOL}
+    return out
+
+
 def responses_to_chat_request(body: dict, upstream_model: str) -> dict:
     """Translate the portable Responses request subset to Chat Completions."""
     _validate_portable(body)
@@ -147,6 +214,11 @@ def responses_to_chat_request(body: dict, upstream_model: str) -> dict:
             raise UnsupportedResponsesFeature(f"unsupported input item type: {kind}")
 
     out: dict = {"model": upstream_model, "messages": messages, "stream": bool(body.get("stream"))}
+    structured = structured_output_format(body)
+    if structured and body.get("tools"):
+        raise UnsupportedResponsesFeature(
+            "legacy structured-output emulation cannot be combined with client function tools"
+        )
     if body.get("tools"):
         out["tools"] = [{
             "type": "function",
@@ -159,6 +231,11 @@ def responses_to_chat_request(body: dict, upstream_model: str) -> dict:
         } for tool in body["tools"]]
     if "tool_choice" in body:
         out["tool_choice"] = _chat_tool_choice(body["tool_choice"])
+    if structured:
+        out["tools"] = [_chat_structured_tool(structured)]
+        out["tool_choice"] = {
+            "type": "function", "function": {"name": STRUCTURED_OUTPUT_TOOL},
+        }
     for source, target in (
         ("max_output_tokens", "max_tokens"),
         ("temperature", "temperature"),
@@ -167,16 +244,6 @@ def responses_to_chat_request(body: dict, upstream_model: str) -> dict:
     ):
         if source in body:
             out[target] = body[source]
-    text = body.get("text") or {}
-    if isinstance(text, dict) and text.get("format"):
-        fmt = text["format"]
-        if fmt.get("type") == "json_schema":
-            out["response_format"] = {
-                "type": "json_schema",
-                "json_schema": {k: v for k, v in fmt.items() if k != "type"},
-            }
-        elif fmt.get("type") == "json_object":
-            out["response_format"] = {"type": "json_object"}
     if out["stream"]:
         out["stream_options"] = {"include_usage": True}
     return out
@@ -280,6 +347,11 @@ def responses_to_messages_request(body: dict, upstream_model: str) -> dict:
     }
     if system_parts:
         out["system"] = "\n\n".join(part for part in system_parts if part)
+    structured = structured_output_format(body)
+    if structured and body.get("tools"):
+        raise UnsupportedResponsesFeature(
+            "legacy structured-output emulation cannot be combined with client function tools"
+        )
     if body.get("tools") and body.get("tool_choice") != "none":
         out["tools"] = [{
             "name": tool.get("name"),
@@ -290,6 +362,9 @@ def responses_to_messages_request(body: dict, upstream_model: str) -> dict:
         choice = _anthropic_tool_choice(body["tool_choice"])
         if choice is not None:
             out["tool_choice"] = choice
+    if structured:
+        out["tools"] = [_messages_structured_tool(structured)]
+        out["tool_choice"] = {"type": "tool", "name": STRUCTURED_OUTPUT_TOOL}
     for key in ("temperature", "top_p"):
         if key in body:
             out[key] = body[key]
@@ -344,15 +419,26 @@ def _message_item(text: str, item_id: Optional[str] = None) -> dict:
     }
 
 
-def chat_response_to_response(payload: dict, model: str) -> dict:
+def chat_response_to_response(
+    payload: dict, model: str, structured_tool_name: Optional[str] = None
+) -> dict:
     response = _base_response(model, str(payload.get("id") or "").replace("chatcmpl-", "resp_"))
     choices = payload.get("choices") or []
     choice = choices[0] if choices else {}
     message = choice.get("message") or {}
-    if message.get("content") is not None:
+    structured_call = next((
+        call for call in message.get("tool_calls") or []
+        if (call.get("function") or {}).get("name") == structured_tool_name
+    ), None) if structured_tool_name else None
+    if structured_call is not None:
+        arguments = (structured_call.get("function") or {}).get("arguments", "{}")
+        response["output"].append(_message_item(arguments))
+    elif message.get("content") is not None:
         response["output"].append(_message_item(_text(message.get("content"))))
     for call in message.get("tool_calls") or []:
         fn = call.get("function") or {}
+        if structured_tool_name and fn.get("name") == structured_tool_name:
+            continue
         response["output"].append({
             "id": _id("fc_"),
             "type": "function_call",
@@ -376,9 +462,21 @@ def chat_response_to_response(payload: dict, model: str) -> dict:
     return response
 
 
-def messages_response_to_response(payload: dict, model: str) -> dict:
+def messages_response_to_response(
+    payload: dict, model: str, structured_tool_name: Optional[str] = None
+) -> dict:
     response = _base_response(model, str(payload.get("id") or "").replace("msg_", "resp_"))
+    structured_block = next((
+        block for block in payload.get("content") or []
+        if block.get("type") == "tool_use" and block.get("name") == structured_tool_name
+    ), None) if structured_tool_name else None
+    if structured_block is not None:
+        response["output"].append(_message_item(json.dumps(
+            structured_block.get("input") or {}, separators=(",", ":")
+        )))
     for block in payload.get("content") or []:
+        if structured_block is not None:
+            continue
         if block.get("type") == "text":
             response["output"].append(_message_item(block.get("text", "")))
         elif block.get("type") == "tool_use":
@@ -397,8 +495,42 @@ def messages_response_to_response(payload: dict, model: str) -> dict:
     return response
 
 
+def native_structured_response_to_text(payload: dict) -> dict:
+    """Hide the private native Responses function call as structured output text."""
+    call = next((
+        item for item in payload.get("output") or []
+        if item.get("type") == "function_call" and item.get("name") == STRUCTURED_OUTPUT_TOOL
+    ), None)
+    if call is None:
+        return payload
+    response = dict(payload)
+    response["output"] = [_message_item(call.get("arguments", "{}"))]
+    return response
+
+
 def _sse(event: dict) -> bytes:
     return f"data: {json.dumps(event, separators=(',', ':'))}\n\n".encode()
+
+
+def _complete_text_events(state: "_ResponseStream", text: str) -> list[bytes]:
+    """Append one completed assistant message and return its SSE lifecycle."""
+    item = _message_item(text)
+    state.output.append(item)
+    index = len(state.output) - 1
+    part = item["content"][0]
+    return [
+        state.event("response.output_item.added", output_index=index,
+                    item={**item, "status": "in_progress"}),
+        state.event("response.content_part.added", item_id=item["id"], output_index=index,
+                    content_index=0, part={**part, "text": ""}),
+        state.event("response.output_text.delta", item_id=item["id"], output_index=index,
+                    content_index=0, delta=text, logprobs=[]),
+        state.event("response.output_text.done", item_id=item["id"], output_index=index,
+                    content_index=0, text=text, logprobs=[]),
+        state.event("response.content_part.done", item_id=item["id"], output_index=index,
+                    content_index=0, part=part),
+        state.event("response.output_item.done", output_index=index, item=item),
+    ]
 
 
 @dataclass
@@ -434,7 +566,11 @@ class _ResponseStream:
         return self.event(kind, response=self.response)
 
 
-async def chat_sse_to_responses_sse(events: AsyncIterator[dict], model: str) -> AsyncIterator[bytes]:
+async def chat_sse_to_responses_sse(
+    events: AsyncIterator[dict],
+    model: str,
+    structured_tool_name: Optional[str] = None,
+) -> AsyncIterator[bytes]:
     state = _ResponseStream(model)
     for event in state.begin():
         yield event
@@ -458,42 +594,67 @@ async def chat_sse_to_responses_sse(events: AsyncIterator[dict], model: str) -> 
             finish_reason = choice.get("finish_reason") or finish_reason
             delta = choice.get("delta") or {}
             if delta.get("content") is not None:
-                if text_item is None:
-                    text_item = _message_item("")
-                    text_item["status"] = "in_progress"
-                    state.output.append(text_item)
-                    idx = len(state.output) - 1
-                    yield state.event("response.output_item.added", output_index=idx, item=dict(text_item))
-                    yield state.event("response.content_part.added", item_id=text_item["id"], output_index=idx,
-                                      content_index=0, part={"type": "output_text", "annotations": [], "text": ""})
                 delta_text = str(delta.get("content") or "")
                 text += delta_text
-                yield state.event("response.output_text.delta", item_id=text_item["id"],
-                                  output_index=state.output.index(text_item), content_index=0,
-                                  delta=delta_text, logprobs=[])
+                if not structured_tool_name:
+                    if text_item is None:
+                        text_item = _message_item("")
+                        text_item["status"] = "in_progress"
+                        state.output.append(text_item)
+                        idx = len(state.output) - 1
+                        yield state.event("response.output_item.added", output_index=idx,
+                                          item=dict(text_item))
+                        yield state.event(
+                            "response.content_part.added", item_id=text_item["id"],
+                            output_index=idx, content_index=0,
+                            part={"type": "output_text", "annotations": [], "text": ""},
+                        )
+                    yield state.event("response.output_text.delta", item_id=text_item["id"],
+                                      output_index=state.output.index(text_item), content_index=0,
+                                      delta=delta_text, logprobs=[])
             for tool_delta in delta.get("tool_calls") or []:
                 index = int(tool_delta.get("index", 0))
                 fn = tool_delta.get("function") or {}
                 if index not in tools:
-                    item = {
-                        "id": _id("fc_"), "type": "function_call", "status": "in_progress",
-                        "call_id": tool_delta.get("id") or _id("call_"),
-                        "name": fn.get("name"), "arguments": "",
+                    tools[index] = {
+                        "item": {
+                            "id": _id("fc_"), "type": "function_call",
+                            "status": "in_progress",
+                            "call_id": tool_delta.get("id") or _id("call_"),
+                            "name": fn.get("name"), "arguments": "",
+                        },
+                        "emitted": False,
+                        "forwarded": 0,
                     }
-                    tools[index] = item
-                    state.output.append(item)
-                    yield state.event("response.output_item.added", output_index=len(state.output) - 1,
-                                      item=dict(item))
-                item = tools[index]
+                tracked = tools[index]
+                item = tracked["item"]
                 item["call_id"] = tool_delta.get("id") or item["call_id"]
                 item["name"] = fn.get("name") or item["name"]
                 args = fn.get("arguments") or ""
                 item["arguments"] += args
-                if args:
+                is_structured = bool(
+                    structured_tool_name and item["name"] == structured_tool_name
+                )
+                if item["name"] and not is_structured and not tracked["emitted"]:
+                    tracked["emitted"] = True
+                    state.output.append(item)
+                    yield state.event("response.output_item.added",
+                                      output_index=len(state.output) - 1, item=dict(item))
+                pending = item["arguments"][tracked["forwarded"]:]
+                if tracked["emitted"] and pending:
                     yield state.event("response.function_call_arguments.delta", item_id=item["id"],
-                                      output_index=state.output.index(item), delta=args)
+                                      output_index=state.output.index(item), delta=pending)
+                    tracked["forwarded"] = len(item["arguments"])
 
-    if text_item is not None:
+    structured_item = next((
+        tracked["item"] for tracked in tools.values()
+        if structured_tool_name and tracked["item"].get("name") == structured_tool_name
+    ), None)
+    if structured_tool_name:
+        structured_text = structured_item.get("arguments", "{}") if structured_item else text
+        for event in _complete_text_events(state, structured_text):
+            yield event
+    elif text_item is not None:
         text_item["content"][0]["text"] = text
         text_item["status"] = "completed"
         idx = state.output.index(text_item)
@@ -502,7 +663,18 @@ async def chat_sse_to_responses_sse(events: AsyncIterator[dict], model: str) -> 
         yield state.event("response.content_part.done", item_id=text_item["id"], output_index=idx,
                           content_index=0, part=text_item["content"][0])
         yield state.event("response.output_item.done", output_index=idx, item=text_item)
-    for item in tools.values():
+    for tracked in tools.values():
+        item = tracked["item"]
+        if structured_tool_name and item.get("name") == structured_tool_name:
+            continue
+        if not tracked["emitted"]:
+            tracked["emitted"] = True
+            state.output.append(item)
+            yield state.event("response.output_item.added", output_index=len(state.output) - 1,
+                              item=dict(item))
+            if item["arguments"]:
+                yield state.event("response.function_call_arguments.delta", item_id=item["id"],
+                                  output_index=state.output.index(item), delta=item["arguments"])
         item["status"] = "completed"
         idx = state.output.index(item)
         yield state.event("response.function_call_arguments.done", item_id=item["id"], output_index=idx,
@@ -512,11 +684,17 @@ async def chat_sse_to_responses_sse(events: AsyncIterator[dict], model: str) -> 
     yield state.complete(usage, reason)
 
 
-async def messages_sse_to_responses_sse(events: AsyncIterator[dict], model: str) -> AsyncIterator[bytes]:
+async def messages_sse_to_responses_sse(
+    events: AsyncIterator[dict],
+    model: str,
+    structured_tool_name: Optional[str] = None,
+) -> AsyncIterator[bytes]:
     state = _ResponseStream(model)
     for event in state.begin():
         yield event
     blocks: dict[int, dict] = {}
+    structured_blocks: set[int] = set()
+    deferred_text_blocks: set[int] = set()
     input_tokens = output_tokens = cached_tokens = 0
     stop_reason = None
 
@@ -535,18 +713,27 @@ async def messages_sse_to_responses_sse(events: AsyncIterator[dict], model: str)
                 item = _message_item(block.get("text", ""))
                 item["status"] = "in_progress"
                 blocks[index] = item
+                if structured_tool_name:
+                    deferred_text_blocks.add(index)
+                    continue
                 state.output.append(item)
                 out_idx = len(state.output) - 1
                 yield state.event("response.output_item.added", output_index=out_idx, item=dict(item))
                 yield state.event("response.content_part.added", item_id=item["id"], output_index=out_idx,
                                   content_index=0, part={"type": "output_text", "annotations": [], "text": ""})
             elif block.get("type") == "tool_use":
+                initial_input = block.get("input") or {}
                 item = {
                     "id": _id("fc_"), "type": "function_call", "status": "in_progress",
                     "call_id": block.get("id") or _id("call_"), "name": block.get("name"),
-                    "arguments": "",
+                    "arguments": (
+                        json.dumps(initial_input, separators=(",", ":")) if initial_input else ""
+                    ),
                 }
                 blocks[index] = item
+                if structured_tool_name and item["name"] == structured_tool_name:
+                    structured_blocks.add(index)
+                    continue
                 state.output.append(item)
                 yield state.event("response.output_item.added", output_index=len(state.output) - 1,
                                   item=dict(item))
@@ -559,17 +746,24 @@ async def messages_sse_to_responses_sse(events: AsyncIterator[dict], model: str)
             if delta.get("type") == "text_delta":
                 value = delta.get("text", "")
                 item["content"][0]["text"] += value
+                if index in deferred_text_blocks:
+                    continue
                 yield state.event("response.output_text.delta", item_id=item["id"],
                                   output_index=state.output.index(item), content_index=0,
                                   delta=value, logprobs=[])
             elif delta.get("type") == "input_json_delta":
                 value = delta.get("partial_json", "")
                 item["arguments"] += value
+                if index in structured_blocks:
+                    continue
                 yield state.event("response.function_call_arguments.delta", item_id=item["id"],
                                   output_index=state.output.index(item), delta=value)
         elif kind == "content_block_stop":
             item = blocks.get(int(event.get("index", 0)))
             if not item:
+                continue
+            block_index = int(event.get("index", 0))
+            if block_index in structured_blocks or block_index in deferred_text_blocks:
                 continue
             item["status"] = "completed"
             idx = state.output.index(item)
@@ -592,6 +786,58 @@ async def messages_sse_to_responses_sse(events: AsyncIterator[dict], model: str)
             yield state.event("error", **error)
             return
 
+    if structured_tool_name:
+        structured_text = next((
+            blocks[index].get("arguments", "{}") for index in structured_blocks
+        ), None)
+        if structured_text is None:
+            structured_text = "".join(
+                blocks[index]["content"][0]["text"] for index in sorted(deferred_text_blocks)
+            )
+        for event in _complete_text_events(state, structured_text):
+            yield event
     usage = _usage(input_tokens, output_tokens, cached_tokens=cached_tokens)
     reason = "max_output_tokens" if stop_reason == "max_tokens" else None
     yield state.complete(usage, reason)
+
+
+async def native_structured_sse_to_responses_sse(
+    events: AsyncIterator[dict], model: str
+) -> AsyncIterator[bytes]:
+    """Convert a private native Responses function stream into output text."""
+    state = _ResponseStream(model)
+    for event in state.begin():
+        yield event
+    arguments = ""
+    fallback_text: list[str] = []
+    usage = _usage()
+    incomplete_reason = None
+
+    async for event in events:
+        if event.get("__done__"):
+            break
+        kind = event.get("type")
+        if kind == "response.function_call_arguments.delta":
+            arguments += event.get("delta", "")
+        elif kind == "response.output_item.done":
+            item = event.get("item") or {}
+            if item.get("type") == "function_call" and item.get("name") == STRUCTURED_OUTPUT_TOOL:
+                arguments = item.get("arguments", arguments)
+        elif kind == "response.output_text.delta":
+            fallback_text.append(event.get("delta", ""))
+        elif kind in {"response.completed", "response.incomplete", "response.failed"}:
+            final = event.get("response") or {}
+            usage = final.get("usage") or usage
+            incomplete_reason = (final.get("incomplete_details") or {}).get("reason")
+            for item in final.get("output") or []:
+                if item.get("type") == "function_call" and item.get("name") == STRUCTURED_OUTPUT_TOOL:
+                    arguments = item.get("arguments", arguments)
+        elif kind == "error":
+            error = event.get("error") or event
+            yield state.event("error", **error)
+            return
+
+    text = arguments or "".join(fallback_text)
+    for event in _complete_text_events(state, text):
+        yield event
+    yield state.complete(usage, incomplete_reason)

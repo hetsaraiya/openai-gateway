@@ -159,6 +159,16 @@ Messages endpoint. Text, streaming, function tools, tool outputs, token usage,
 and image or structured JSON features supported by the selected upstream are
 translated.
 
+Responses `text.format` requests using `json_schema` or `json_object` are
+emulated with a private forced function call for every OpenCode Go protocol,
+including models with a native Responses endpoint. This avoids depending on
+provider-specific `response_format` availability. The gateway converts the
+function arguments back into ordinary Responses `output_text`, so clients such
+as LangChain can keep using native structured-output mode. Combining this
+emulation with client-supplied function tools is not supported because the
+gateway cannot faithfully enforce a final schema while also allowing arbitrary
+tool selection through legacy upstream protocols.
+
 The compatibility path is intentionally stateless. Features that require an
 OpenAI-hosted Responses runtime—such as `previous_response_id`, Conversations,
 background mode, web search, file search, and computer use—return an
