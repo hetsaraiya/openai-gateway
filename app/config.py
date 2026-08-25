@@ -37,6 +37,9 @@ class Settings:
     # Google Gemini's official OpenAI-compatible endpoint.
     gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta/openai"
     gemini_api_keys: str = ""
+    # Command Code's OpenAI-compatible Provider API.
+    command_code_base_url: str = "https://api.commandcode.ai/provider/v1"
+    command_code_api_keys: str = ""
     # Grok subscription endpoint and OAuth client used by the official CLI.
     xai_base_url: str = "https://cli-chat-proxy.grok.com/v1"
     xai_oauth_issuer: str = "https://auth.x.ai"
@@ -98,6 +101,10 @@ def get_settings() -> Settings:
             default="https://generativelanguage.googleapis.com/v1beta/openai",
         ).rstrip("/"),
         gemini_api_keys=config("GEMINI_API_KEYS", default=""),
+        command_code_base_url=config(
+            "COMMAND_CODE_BASE_URL", default="https://api.commandcode.ai/provider/v1"
+        ).rstrip("/"),
+        command_code_api_keys=config("COMMAND_CODE_API_KEYS", default=""),
         xai_base_url=config(
             "XAI_BASE_URL", default="https://cli-chat-proxy.grok.com/v1"
         ).rstrip("/"),

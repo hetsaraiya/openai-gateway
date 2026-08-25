@@ -129,7 +129,7 @@ function EmptyGateway({ onAddAccount }: { onAddAccount: () => void }) {
       </span>
       <h2 className="relative mt-4 text-lg font-semibold tracking-[-0.02em] text-ink">Connect your first provider account</h2>
       <p className="relative mx-auto mt-2 max-w-md text-sm leading-6 text-muted">
-        Add an OpenAI account or an OpenCode Go key to populate the model catalog and begin routing requests.
+        Add a subscription account or provider API key to populate the model catalog and begin routing requests.
       </p>
       <Button className="relative mt-6" onClick={onAddAccount}>
         Manage accounts

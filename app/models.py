@@ -54,6 +54,12 @@ class GeminiKeyCreate(OpenCodeGoKeyCreate):
     api_key: str = Field(description="Google Gemini API key.")
 
 
+class CommandCodeKeyCreate(OpenCodeGoKeyCreate):
+    """A Command Code Provider API key."""
+
+    api_key: str = Field(description="Command Code Provider API key.")
+
+
 class AccountStatus(BaseModel):
     id: str
     provider: str = "codex"

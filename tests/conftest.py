@@ -27,6 +27,10 @@ def make_settings(strategy="fallback", **kw) -> Settings:
         opencode_go_api_keys=kw.get("opencode_go_api_keys", ""),
         gemini_base_url=kw.get("gemini_base_url", "https://gemini.test/v1beta/openai"),
         gemini_api_keys=kw.get("gemini_api_keys", ""),
+        command_code_base_url=kw.get(
+            "command_code_base_url", "https://command-code.test/provider/v1"
+        ),
+        command_code_api_keys=kw.get("command_code_api_keys", ""),
         xai_base_url=kw.get("xai_base_url", "https://xai.test/v1"),
         xai_oauth_issuer=kw.get("xai_oauth_issuer", "https://auth.xai.test"),
         xai_oauth_client_id=kw.get("xai_oauth_client_id", "xai-client"),

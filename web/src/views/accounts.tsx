@@ -1,4 +1,4 @@
-import { Cloud, KeyRound, MousePointer2, Plus, Sparkles, Zap } from "lucide-react"
+import { Cloud, Command, KeyRound, MousePointer2, Plus, Sparkles, Zap } from "lucide-react"
 
 import { AccountDialog } from "../components/account-dialog"
 import { DeleteAccountDialog } from "../components/delete-account-dialog"
@@ -52,6 +52,19 @@ export function Accounts({
                 <button className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-accent px-4 text-sm font-medium text-accent-fg shadow-panel transition-colors hover:bg-accent-hover">
                   <Plus size={16} aria-hidden="true" />
                   OpenAI account
+                </button>
+              }
+              onLoginStarted={onLoginStarted}
+              onAccountAdded={onAccountAdded}
+            />
+            <AccountDialog
+              gatewayKey={gatewayKey}
+              disabled={!gatewayKey.trim()}
+              provider="command-code"
+              trigger={
+                <button className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-line bg-surface px-4 text-sm font-medium text-ink shadow-panel transition-colors hover:border-line-strong hover:bg-elevated">
+                  <Command size={16} aria-hidden="true" />
+                  Command Code key
                 </button>
               }
               onLoginStarted={onLoginStarted}

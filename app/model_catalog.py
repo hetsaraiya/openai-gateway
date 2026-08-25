@@ -28,6 +28,7 @@ from .proxy import (
     OPENCODE_GO_RESPONSES_ENDPOINT,
     OPENCODE_GO_RESPONSES_MODELS,
     build_codex_headers,
+    build_command_code_headers,
     build_gemini_headers,
     build_opencode_go_headers,
     build_xai_headers,
@@ -57,6 +58,9 @@ class ModelCatalog:
         self._gemini_raw: list[dict] = []
         self._gemini_fetched_at: float = 0.0
         self._gemini_lock = asyncio.Lock()
+        self._command_code_raw: list[dict] = []
+        self._command_code_fetched_at: float = 0.0
+        self._command_code_lock = asyncio.Lock()
         self._cursor_raw: list[dict] = []
         self._cursor_fetched_at: float = 0.0
         self._cursor_lock = asyncio.Lock()
@@ -152,15 +156,17 @@ class ModelCatalog:
             data.extend(self._to_openai(m) for m in self._visible())
         except ModelCatalogError as exc:
             codex_error = exc
-        opencode_models, xai_models, gemini_models, cursor_catalog = await asyncio.gather(
+        opencode_models, xai_models, gemini_models, command_code_models, cursor_catalog = await asyncio.gather(
             self._opencode_go_models(),
             self._xai_models(),
             self._gemini_models(),
+            self._command_code_models(),
             self._cursor_models(),
         )
         data.extend(opencode_models)
         data.extend(xai_models)
         data.extend(gemini_models)
+        data.extend(command_code_models)
         data.extend(cursor_catalog)
         if not data and codex_error:
             raise codex_error
@@ -180,7 +186,7 @@ class ModelCatalog:
             return visible[0].get("slug")
         provider_models = await asyncio.gather(
             self._opencode_go_models(), self._xai_models(), self._gemini_models(),
-            self._cursor_models(),
+            self._command_code_models(), self._cursor_models(),
         )
         return next((model["id"] for models in provider_models for model in models), None)
 
@@ -392,6 +398,65 @@ class ModelCatalog:
             "owned_by": model.get("owned_by") or "google",
             "display_name": model.get("name") or model_id,
             "gateway": "gemini",
+            "supported_in_api": True,
+            "supported_endpoints": ["/v1/chat/completions"],
+        }
+
+    async def _command_code_models(self) -> list[dict]:
+        if self._command_code_raw and (
+            time.time() - self._command_code_fetched_at
+        ) < self._settings.models_cache_ttl:
+            return [self._command_code_to_openai(model) for model in self._command_code_raw]
+        async with self._command_code_lock:
+            if self._command_code_raw and (
+                time.time() - self._command_code_fetched_at
+            ) < self._settings.models_cache_ttl:
+                return [self._command_code_to_openai(model) for model in self._command_code_raw]
+            try:
+                candidates = await self._router.candidates("command-code")
+            except NoAccountAvailable:
+                return []
+
+            last_error = "no attempts"
+            for acct in candidates:
+                try:
+                    response = await self._client.get(
+                        f"{self._settings.command_code_base_url}/models",
+                        headers=build_command_code_headers(acct, stream=False),
+                        timeout=30.0,
+                    )
+                except httpx.HTTPError as exc:
+                    last_error = f"{acct.id}: {exc}"
+                    continue
+                if response.status_code == 200:
+                    models = (response.json() or {}).get("data") or []
+                    self._command_code_raw = [
+                        model for model in models
+                        if isinstance(model, dict) and model.get("id")
+                    ]
+                    self._command_code_fetched_at = time.time()
+                    return [
+                        self._command_code_to_openai(model)
+                        for model in self._command_code_raw
+                    ]
+                last_error = f"{acct.id}: HTTP {response.status_code}"
+
+            if self._command_code_raw:
+                log.warning("Command Code model refresh failed (%s); serving stale cache", last_error)
+                return [self._command_code_to_openai(model) for model in self._command_code_raw]
+            log.warning("Command Code models unavailable (%s)", last_error)
+            return []
+
+    @staticmethod
+    def _command_code_to_openai(model: dict) -> dict:
+        model_id = str(model.get("id") or "")
+        return {
+            **model,
+            "id": f"command-code/{model_id}",
+            "object": "model",
+            "owned_by": model.get("owned_by") or "command-code",
+            "display_name": model.get("name") or model.get("display_name") or model_id,
+            "gateway": "command-code",
             "supported_in_api": True,
             "supported_endpoints": ["/v1/chat/completions"],
         }

@@ -26,6 +26,7 @@ _RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 OPENCODE_GO_MODEL_PREFIX = "opencode-go/"
 XAI_MODEL_PREFIX = "xai/"
 GEMINI_MODEL_PREFIX = "gemini/"
+COMMAND_CODE_MODEL_PREFIX = "command-code/"
 
 # OpenCode Go publishes model-specific inference surfaces. Keep this
 # mapping here so routing and the dashboard describe the same capability.
@@ -40,6 +41,7 @@ OPENCODE_GO_MESSAGES_MODELS = frozenset({
 })
 XAI_SUPPORTED_ENDPOINTS = ("/v1/chat/completions", "/v1/responses")
 GEMINI_SUPPORTED_ENDPOINTS = ("/v1/chat/completions",)
+COMMAND_CODE_SUPPORTED_ENDPOINTS = ("/v1/chat/completions",)
 
 
 def build_codex_headers(settings: Settings, acct: CodexAccount, stream: bool) -> dict:
@@ -174,6 +176,22 @@ def strip_gemini_model(model: str) -> str:
 
 
 def build_gemini_headers(acct, stream: bool) -> dict:
+    return {
+        "Authorization": f"Bearer {acct.access_token}",
+        "Content-Type": "application/json",
+        "Accept": "text/event-stream" if stream else "application/json",
+    }
+
+
+def is_command_code_model(model: Optional[str]) -> bool:
+    return bool(model and model.startswith(COMMAND_CODE_MODEL_PREFIX))
+
+
+def strip_command_code_model(model: str) -> str:
+    return model[len(COMMAND_CODE_MODEL_PREFIX):]
+
+
+def build_command_code_headers(acct, stream: bool) -> dict:
     return {
         "Authorization": f"Bearer {acct.access_token}",
         "Content-Type": "application/json",
@@ -479,3 +497,46 @@ class GeminiProxy:
             return acct, resp
 
         raise AllAccountsFailed(f"all Gemini attempts failed ({last_error})")
+
+
+class CommandCodeProxy:
+    """Proxy Command Code's OpenAI-compatible Provider API."""
+
+    def __init__(self, settings: Settings, router: AccountRouter, client: httpx.AsyncClient):
+        self._settings = settings
+        self._router = router
+        self._client = client
+
+    async def open_chat(self, chat_body: dict) -> tuple[object, httpx.Response]:
+        body = dict(chat_body)
+        body["model"] = strip_command_code_model(str(body.get("model") or ""))
+        candidates = await self._router.candidates("command-code")
+        last_error = "no attempts made"
+
+        for acct in candidates:
+            try:
+                req = self._client.build_request(
+                    "POST",
+                    f"{self._settings.command_code_base_url}/chat/completions",
+                    headers=build_command_code_headers(acct, bool(body.get("stream"))),
+                    json=body,
+                    timeout=self._settings.request_timeout,
+                )
+                resp = await self._client.send(req, stream=True)
+            except (CredentialError, httpx.ConnectError, httpx.ReadTimeout, httpx.RemoteProtocolError) as exc:
+                last_error = f"{acct.id}: {exc}"
+                log.warning("Command Code request failed on %s: %s", acct.id, exc)
+                continue
+
+            if resp.status_code in _RETRYABLE_STATUS:
+                if resp.status_code == 429:
+                    retry_after = OpenCodeGoProxy._retry_after(resp)
+                    await self._router.record_rate_limited(acct, retry_after)
+                last_error = f"{acct.id}: HTTP {resp.status_code}"
+                await resp.aclose()
+                continue
+
+            await self._router.record_success(acct)
+            return acct, resp
+
+        raise AllAccountsFailed(f"all Command Code attempts failed ({last_error})")

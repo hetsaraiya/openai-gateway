@@ -109,7 +109,7 @@ export function startProviderDeviceLogin(provider: "xai" | "cursor", accountId: 
 }
 
 export function addProviderKey(
-  provider: "opencode-go" | "gemini",
+  provider: "opencode-go" | "gemini" | "command-code",
   payload: { api_key: string; identifier?: string; label?: string },
   key: string,
 ) {
@@ -169,6 +169,7 @@ export function providerFor(model: Model) {
   if (model.id.startsWith("opencode-go/")) return "opencode-go"
   if (model.id.startsWith("xai/")) return "xai"
   if (model.id.startsWith("gemini/")) return "gemini"
+  if (model.id.startsWith("command-code/")) return "command-code"
   return "codex"
 }
 
@@ -178,6 +179,7 @@ export function providerLabel(provider: string) {
   if (provider === "xai") return "xAI"
   if (provider === "cursor") return "Cursor"
   if (provider === "gemini") return "Google Gemini"
+  if (provider === "command-code") return "Command Code"
   return provider
     .split(/[-_]/)
     .filter(Boolean)

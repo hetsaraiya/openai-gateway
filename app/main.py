@@ -48,6 +48,7 @@ from .model_catalog import ModelCatalog, ModelCatalogError
 from .models import (
     AccountStatus,
     ChatCompletionRequest,
+    CommandCodeKeyCreate,
     GeminiKeyCreate,
     HealthResponse,
     OpenCodeGoKeyCreate,
@@ -58,6 +59,8 @@ from .observability import configure_logging, log_access, new_request_id, reques
 from .proxy import (
     AllAccountsFailed,
     CODEX_SUPPORTED_ENDPOINTS,
+    COMMAND_CODE_SUPPORTED_ENDPOINTS,
+    CommandCodeProxy,
     CodexProxy,
     GEMINI_SUPPORTED_ENDPOINTS,
     GeminiProxy,
@@ -69,13 +72,16 @@ from .proxy import (
     OpenCodeGoProxy,
     XAIProxy,
     build_codex_headers,
+    build_command_code_headers,
     build_gemini_headers,
     build_opencode_go_headers,
     build_xai_headers,
     is_opencode_go_model,
+    is_command_code_model,
     is_gemini_model,
     is_xai_model,
     strip_opencode_go_model,
+    strip_command_code_model,
     strip_gemini_model,
     strip_xai_model,
     XAI_SUPPORTED_ENDPOINTS,
@@ -116,6 +122,7 @@ async def lifespan(app: FastAPI):
     opencode_go_proxy = OpenCodeGoProxy(settings, router, client)
     xai_proxy = XAIProxy(settings, router, client)
     gemini_proxy = GeminiProxy(settings, router, client)
+    command_code_proxy = CommandCodeProxy(settings, router, client)
     catalog = ModelCatalog(settings, router, client)
     device_logins = DeviceLoginManager(settings, router)
     xai_logins = XAILoginManager(settings, router, client)
@@ -129,6 +136,7 @@ async def lifespan(app: FastAPI):
     app.state.opencode_go_proxy = opencode_go_proxy
     app.state.xai_proxy = xai_proxy
     app.state.gemini_proxy = gemini_proxy
+    app.state.command_code_proxy = command_code_proxy
     app.state.catalog = catalog
     app.state.device_logins = device_logins
     app.state.xai_logins = xai_logins
@@ -399,6 +407,12 @@ async def test_account(account_id: str, request: Request) -> Response:
                 headers=build_gemini_headers(account, stream=False),
                 timeout=30.0,
             )
+        elif provider == "command-code":
+            response = await s.client.get(
+                f"{s.settings.command_code_base_url}/models",
+                headers=build_command_code_headers(account, stream=False),
+                timeout=30.0,
+            )
         elif provider == "cursor":
             await cursor_status(s.settings, account.home)
             response = httpx.Response(200, json={"status": "ok"})
@@ -558,6 +572,29 @@ async def add_gemini_key(payload: GeminiKeyCreate, request: Request) -> Response
     })
 
 
+@app.post("/v1/admin/command-code/keys", dependencies=[Depends(require_master_key)])
+async def add_command_code_key(payload: CommandCodeKeyCreate, request: Request) -> Response:
+    """Persist and hot-load a Command Code Provider API key."""
+    s = request.app.state
+    account_id = payload.identifier or f"command-code-{uuid4().hex}"
+    if not valid_account_id(account_id):
+        return _error(400, "invalid identifier: use letters, digits, '.', '_', '-'",
+                      "invalid_account_id", "invalid_request_error")
+    data = {"type": "command-code", "api_key": payload.api_key}
+    if payload.label:
+        data["label"] = payload.label
+    try:
+        acct = save_account_file(s.settings, account_id, data)
+    except CredentialError as exc:
+        return _error(400, str(exc), "invalid_api_key", "invalid_request_error")
+    replaced = s.router.add_account(acct)
+    log.info("Command Code key %s %s via API", account_id, "replaced" if replaced else "added")
+    return JSONResponse(status_code=200 if replaced else 201, content={
+        "status": "ok", "id": account_id, "label": payload.label,
+        "replaced": replaced, "provider": "command-code",
+    })
+
+
 @app.get("/v1/models", dependencies=[Depends(require_master_key)])
 async def list_models(request: Request) -> Response:
     # Live catalog fetched from the Codex backend (cached), never hardcoded.
@@ -639,6 +676,7 @@ def _dashboard_model(model: dict[str, Any]) -> dict[str, Any]:
             "opencode-go" if is_opencode_go_model(model_id)
             else "xai" if is_xai_model(model_id)
             else "gemini" if is_gemini_model(model_id)
+            else "command-code" if is_command_code_model(model_id)
             else "cursor" if model_id.startswith("cursor/")
             else "codex"
         )
@@ -657,6 +695,8 @@ def _dashboard_model(model: dict[str, Any]) -> dict[str, Any]:
             endpoints = list(XAI_SUPPORTED_ENDPOINTS if provider == "xai" else CODEX_SUPPORTED_ENDPOINTS)
         elif provider == "gemini":
             endpoints = list(GEMINI_SUPPORTED_ENDPOINTS)
+        elif provider == "command-code":
+            endpoints = list(COMMAND_CODE_SUPPORTED_ENDPOINTS)
         else:
             endpoints = list(CODEX_SUPPORTED_ENDPOINTS)
     row["supported_endpoints"] = endpoints
@@ -687,6 +727,8 @@ def _dashboard_providers(gateways: list[dict[str, Any]], models: list[dict[str, 
             row["supported_endpoints"].update(XAI_SUPPORTED_ENDPOINTS)
         elif provider == "gemini":
             row["supported_endpoints"].update(GEMINI_SUPPORTED_ENDPOINTS)
+        elif provider == "command-code":
+            row["supported_endpoints"].update(COMMAND_CODE_SUPPORTED_ENDPOINTS)
         elif provider == "cursor":
             row["supported_endpoints"].update(CODEX_SUPPORTED_ENDPOINTS)
     for model in models:
@@ -734,6 +776,8 @@ async def chat_completions(request: Request, payload: ChatCompletionRequest) -> 
         return await _serve_xai_chat(request, s, chat, model, stream)
     if is_gemini_model(model):
         return await _serve_gemini_chat(request, s, chat, model, stream)
+    if is_command_code_model(model):
+        return await _serve_command_code_chat(request, s, chat, model, stream)
     if model.startswith("cursor/"):
         return await _serve_cursor_chat(s, chat, model, stream)
 
@@ -952,6 +996,21 @@ async def _serve_gemini_chat(
 
     async def open_upstream():
         return await s.gemini_proxy.open_chat(body)
+
+    if stream:
+        return await _serve_direct_stream(open_upstream)
+    return await _serve_direct_nonstream(request, s, open_upstream)
+
+
+async def _serve_command_code_chat(
+    request: Request, s, chat: dict, model: str, stream: bool
+) -> Response:
+    body = dict(chat)
+    body["model"] = model
+    body["stream"] = stream
+
+    async def open_upstream():
+        return await s.command_code_proxy.open_chat(body)
 
     if stream:
         return await _serve_direct_stream(open_upstream)

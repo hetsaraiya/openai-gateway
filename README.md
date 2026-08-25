@@ -1,7 +1,7 @@
 <div align="center">
   <img src="./assets/openai-gateway-logo.svg" alt="OpenAI Gateway logo" width="680">
 
-  **One OpenAI-compatible endpoint for Codex, OpenCode Go, xAI, Cursor, and Gemini.**
+  **One OpenAI-compatible endpoint for Codex, OpenCode Go, xAI, Cursor, Gemini, and Command Code.**
 </div>
 
 ## Overview
@@ -16,6 +16,7 @@ The gateway was originally built for
 sandboxes need one stable endpoint without receiving every upstream credential.
 It now also supports OpenCode Go subscription keys, xAI and Cursor
 subscriptions, and Google Gemini API keys.
+Command Code Provider API keys are supported as an additional live model source.
 
 > Use only accounts, subscriptions, and workloads that you are authorized to
 > operate. Upstream APIs and account terms may change independently of this
@@ -34,6 +35,7 @@ flowchart LR
     Accounts --> OpenCode["OpenCode Go"]
     Accounts --> XAI["xAI"]
     Accounts --> Gemini["Google Gemini"]
+    Accounts --> CommandCode["Command Code"]
     API --> Dashboard["Authenticated dashboard"]
 ```
 
@@ -45,6 +47,7 @@ flowchart LR
 - xAI Chat Completions and Responses with live language-model discovery.
 - xAI automatic prompt caching with conversation-key forwarding.
 - Google Gemini chat completions with live model discovery and key failover.
+- Command Code chat completions with live model discovery and key failover.
 - Multiple Codex accounts loaded from individual credential files.
 - Automatic OAuth refresh with refreshed credentials persisted to disk.
 - `fallback`, `round_robin`, and `quota_aware` routing strategies.
@@ -151,7 +154,8 @@ print(response.choices[0].message.content)
 Query `GET /v1/models` to use model IDs actually available to the configured
 accounts. OpenCode Go models use the `opencode-go/<model-id>` prefix at the
 gateway boundary; xAI models use `xai/<model-id>`, Cursor subscription models
-use `cursor/<model-id>`, and Gemini models use `gemini/<model-id>`.
+use `cursor/<model-id>`, Gemini models use `gemini/<model-id>`, and Command Code
+models use `command-code/<model-id>`.
 
 ### OpenCode Go Responses compatibility
 
@@ -230,6 +234,7 @@ Grok subscription OAuth device flow; developer-console API keys are not used.
 | `DEDUP_TTL` | `600` | Deduplicated response lifetime in seconds |
 | `OPENCODE_GO_API_KEYS` | empty | Optional comma-separated subscription keys |
 | `GEMINI_API_KEYS` | empty | Optional comma-separated Google AI Studio API keys |
+| `COMMAND_CODE_API_KEYS` | empty | Optional comma-separated Command Code Provider API keys |
 | `XAI_BASE_URL` | `https://cli-chat-proxy.grok.com/v1` | Grok subscription inference base URL |
 | `XAI_OAUTH_ISSUER` | `https://auth.x.ai` | xAI OAuth issuer |
 | `XAI_OAUTH_CLIENT_ID` | Grok CLI public client | OAuth device-flow client |

@@ -38,7 +38,7 @@ export function AccountDialog({
   const [busy, setBusy] = useState(false)
 
   const trimmed = account.trim()
-  const isApiKeyProvider = provider === "opencode-go" || provider === "gemini"
+  const isApiKeyProvider = provider === "opencode-go" || provider === "gemini" || provider === "command-code"
   const invalid = trimmed.length > 0 && !VALID_ID.test(trimmed)
 
   function reset(next: boolean) {
@@ -98,7 +98,7 @@ export function AccountDialog({
           title={`Add ${providerLabel(provider)} account`}
           description={
             isApiKeyProvider
-              ? `Add ${provider === "gemini" ? "a" : "an"} ${providerLabel(provider)} API key. It is stored securely by the gateway.`
+              ? `Add ${provider === "opencode-go" ? "an" : "a"} ${providerLabel(provider)} API key. It is stored securely by the gateway.`
               : provider === "xai" || provider === "cursor"
                 ? `Name the account, then sign in securely with your ${providerLabel(provider)} subscription.`
                 : "Name the account, then finish the secure OpenAI device sign-in in your browser."
