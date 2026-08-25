@@ -11,6 +11,7 @@ import { useTheme } from "./lib/theme"
 import { useToasts } from "./lib/use-toasts"
 import { relativeTime } from "./lib/utils"
 import { Accounts } from "./views/accounts"
+import { Chat } from "./views/chat"
 import { Landing } from "./views/landing"
 import { Overview } from "./views/overview"
 
@@ -252,6 +253,8 @@ export default function App() {
                 onSelectProvider={setSelectedProvider}
                 onAddAccount={() => selectView("accounts")}
               />
+            ) : activeView === "chat" ? (
+              <Chat data={data} gatewayKey={gatewayKey} />
             ) : (
               <Accounts
                 data={data}

@@ -1,7 +1,7 @@
 <div align="center">
   <img src="./assets/openai-gateway-logo.svg" alt="OpenAI Gateway logo" width="680">
 
-  **One OpenAI-compatible endpoint for Codex, OpenCode Go, and xAI.**
+  **One OpenAI-compatible endpoint for Codex, OpenCode Go, xAI, Cursor, and Gemini.**
 </div>
 
 ## Overview
@@ -14,8 +14,8 @@ translates Chat Completions requests to the upstream Responses protocol.
 The gateway was originally built for
 [Spores](https://github.com/hetsaraiya/spores), where disposable coding
 sandboxes need one stable endpoint without receiving every upstream credential.
-It now also supports optional OpenCode Go subscription keys and xAI inference
-API keys.
+It now also supports OpenCode Go subscription keys, xAI and Cursor
+subscriptions, and Google Gemini API keys.
 
 > Use only accounts, subscriptions, and workloads that you are authorized to
 > operate. Upstream APIs and account terms may change independently of this
@@ -33,6 +33,7 @@ flowchart LR
     Accounts --> Codex["Codex backend"]
     Accounts --> OpenCode["OpenCode Go"]
     Accounts --> XAI["xAI"]
+    Accounts --> Gemini["Google Gemini"]
     API --> Dashboard["Authenticated dashboard"]
 ```
 
@@ -43,6 +44,7 @@ flowchart LR
 - Anthropic-compatible `messages` requests for supported OpenCode Go models.
 - xAI Chat Completions and Responses with live language-model discovery.
 - xAI automatic prompt caching with conversation-key forwarding.
+- Google Gemini chat completions with live model discovery and key failover.
 - Multiple Codex accounts loaded from individual credential files.
 - Automatic OAuth refresh with refreshed credentials persisted to disk.
 - `fallback`, `round_robin`, and `quota_aware` routing strategies.
@@ -51,6 +53,7 @@ flowchart LR
 - Streaming and non-streaming response translation.
 - Device-login and credential-management endpoints for adding accounts.
 - An authenticated dashboard for inspecting providers, models, and health.
+- A stateless browser chat playground for every chat-capable model.
 - Structured request logging with per-request identifiers.
 
 ## API surface
@@ -147,8 +150,8 @@ print(response.choices[0].message.content)
 
 Query `GET /v1/models` to use model IDs actually available to the configured
 accounts. OpenCode Go models use the `opencode-go/<model-id>` prefix at the
-gateway boundary; xAI models use `xai/<model-id>` and Cursor subscription
-models use `cursor/<model-id>`.
+gateway boundary; xAI models use `xai/<model-id>`, Cursor subscription models
+use `cursor/<model-id>`, and Gemini models use `gemini/<model-id>`.
 
 ### OpenCode Go Responses compatibility
 
@@ -226,6 +229,7 @@ Grok subscription OAuth device flow; developer-console API keys are not used.
 | `DEDUP_ENABLED` | `true` | Enable idempotency-key deduplication |
 | `DEDUP_TTL` | `600` | Deduplicated response lifetime in seconds |
 | `OPENCODE_GO_API_KEYS` | empty | Optional comma-separated subscription keys |
+| `GEMINI_API_KEYS` | empty | Optional comma-separated Google AI Studio API keys |
 | `XAI_BASE_URL` | `https://cli-chat-proxy.grok.com/v1` | Grok subscription inference base URL |
 | `XAI_OAUTH_ISSUER` | `https://auth.x.ai` | xAI OAuth issuer |
 | `XAI_OAUTH_CLIENT_ID` | Grok CLI public client | OAuth device-flow client |

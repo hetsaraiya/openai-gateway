@@ -1,9 +1,10 @@
-import { KeyRound, LayoutDashboard, type LucideIcon } from "lucide-react"
+import { KeyRound, LayoutDashboard, MessageSquare, type LucideIcon } from "lucide-react"
 
-export type View = "overview" | "accounts"
+export type View = "overview" | "chat" | "accounts"
 
 export const NAVIGATION: { id: View; label: string; icon: LucideIcon }[] = [
   { id: "overview", label: "Model catalog", icon: LayoutDashboard },
+  { id: "chat", label: "Chat playground", icon: MessageSquare },
   { id: "accounts", label: "Accounts", icon: KeyRound },
 ]
 

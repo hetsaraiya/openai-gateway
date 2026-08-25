@@ -25,6 +25,7 @@ log = logging.getLogger("gateway.proxy")
 _RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 OPENCODE_GO_MODEL_PREFIX = "opencode-go/"
 XAI_MODEL_PREFIX = "xai/"
+GEMINI_MODEL_PREFIX = "gemini/"
 
 # OpenCode Go publishes model-specific inference surfaces. Keep this
 # mapping here so routing and the dashboard describe the same capability.
@@ -38,6 +39,7 @@ OPENCODE_GO_MESSAGES_MODELS = frozenset({
     "qwen3.8-max", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-plus",
 })
 XAI_SUPPORTED_ENDPOINTS = ("/v1/chat/completions", "/v1/responses")
+GEMINI_SUPPORTED_ENDPOINTS = ("/v1/chat/completions",)
 
 
 def build_codex_headers(settings: Settings, acct: CodexAccount, stream: bool) -> dict:
@@ -160,6 +162,22 @@ def build_opencode_go_messages_headers(acct) -> dict:
         "x-api-key": acct.access_token,
         "anthropic-version": "2023-06-01",
         "Content-Type": "application/json",
+    }
+
+
+def is_gemini_model(model: Optional[str]) -> bool:
+    return bool(model and model.startswith(GEMINI_MODEL_PREFIX))
+
+
+def strip_gemini_model(model: str) -> str:
+    return model[len(GEMINI_MODEL_PREFIX):]
+
+
+def build_gemini_headers(acct, stream: bool) -> dict:
+    return {
+        "Authorization": f"Bearer {acct.access_token}",
+        "Content-Type": "application/json",
+        "Accept": "text/event-stream" if stream else "application/json",
     }
 
 
@@ -418,3 +436,46 @@ class XAIProxy:
             return acct, resp
 
         raise AllAccountsFailed(f"all xAI attempts failed ({last_error})")
+
+
+class GeminiProxy:
+    """Proxy Google's official OpenAI-compatible Chat Completions API."""
+
+    def __init__(self, settings: Settings, router: AccountRouter, client: httpx.AsyncClient):
+        self._settings = settings
+        self._router = router
+        self._client = client
+
+    async def open_chat(self, chat_body: dict) -> tuple[object, httpx.Response]:
+        body = dict(chat_body)
+        body["model"] = strip_gemini_model(str(body.get("model") or ""))
+        candidates = await self._router.candidates("gemini")
+        last_error = "no attempts made"
+
+        for acct in candidates:
+            try:
+                req = self._client.build_request(
+                    "POST",
+                    f"{self._settings.gemini_base_url}/chat/completions",
+                    headers=build_gemini_headers(acct, bool(body.get("stream"))),
+                    json=body,
+                    timeout=self._settings.request_timeout,
+                )
+                resp = await self._client.send(req, stream=True)
+            except (CredentialError, httpx.ConnectError, httpx.ReadTimeout, httpx.RemoteProtocolError) as exc:
+                last_error = f"{acct.id}: {exc}"
+                log.warning("Gemini request failed on %s: %s", acct.id, exc)
+                continue
+
+            if resp.status_code in _RETRYABLE_STATUS:
+                if resp.status_code == 429:
+                    retry_after = OpenCodeGoProxy._retry_after(resp)
+                    await self._router.record_rate_limited(acct, retry_after)
+                last_error = f"{acct.id}: HTTP {resp.status_code}"
+                await resp.aclose()
+                continue
+
+            await self._router.record_success(acct)
+            return acct, resp
+
+        raise AllAccountsFailed(f"all Gemini attempts failed ({last_error})")

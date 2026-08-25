@@ -139,6 +139,7 @@ export function Sidebar({
                   provider.id === "codex" ||
                   provider.id === "opencode-go" ||
                   provider.id === "xai" ||
+                  provider.id === "gemini" ||
                   provider.id === "cursor"
                 return (
                   <section

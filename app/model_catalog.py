@@ -28,6 +28,7 @@ from .proxy import (
     OPENCODE_GO_RESPONSES_ENDPOINT,
     OPENCODE_GO_RESPONSES_MODELS,
     build_codex_headers,
+    build_gemini_headers,
     build_opencode_go_headers,
     build_xai_headers,
 )
@@ -53,6 +54,9 @@ class ModelCatalog:
         self._xai_raw: list[dict] = []
         self._xai_fetched_at: float = 0.0
         self._xai_lock = asyncio.Lock()
+        self._gemini_raw: list[dict] = []
+        self._gemini_fetched_at: float = 0.0
+        self._gemini_lock = asyncio.Lock()
         self._cursor_raw: list[dict] = []
         self._cursor_fetched_at: float = 0.0
         self._cursor_lock = asyncio.Lock()
@@ -148,13 +152,15 @@ class ModelCatalog:
             data.extend(self._to_openai(m) for m in self._visible())
         except ModelCatalogError as exc:
             codex_error = exc
-        opencode_models, xai_models, cursor_catalog = await asyncio.gather(
+        opencode_models, xai_models, gemini_models, cursor_catalog = await asyncio.gather(
             self._opencode_go_models(),
             self._xai_models(),
+            self._gemini_models(),
             self._cursor_models(),
         )
         data.extend(opencode_models)
         data.extend(xai_models)
+        data.extend(gemini_models)
         data.extend(cursor_catalog)
         if not data and codex_error:
             raise codex_error
@@ -173,7 +179,8 @@ class ModelCatalog:
             visible.sort(key=lambda m: m.get("priority", 1_000_000))
             return visible[0].get("slug")
         provider_models = await asyncio.gather(
-            self._opencode_go_models(), self._xai_models(), self._cursor_models()
+            self._opencode_go_models(), self._xai_models(), self._gemini_models(),
+            self._cursor_models(),
         )
         return next((model["id"] for models in provider_models for model in models), None)
 
@@ -324,4 +331,67 @@ class ModelCatalog:
             "supported_endpoints": ["/v1/chat/completions", "/v1/responses"],
             "prompt_caching": True,
             "cached_prompt_text_token_price": model.get("cached_prompt_text_token_price"),
+        }
+
+    async def _gemini_models(self) -> list[dict]:
+        if self._gemini_raw and (
+            time.time() - self._gemini_fetched_at
+        ) < self._settings.models_cache_ttl:
+            return [self._gemini_to_openai(model) for model in self._gemini_raw]
+        async with self._gemini_lock:
+            if self._gemini_raw and (
+                time.time() - self._gemini_fetched_at
+            ) < self._settings.models_cache_ttl:
+                return [self._gemini_to_openai(model) for model in self._gemini_raw]
+            try:
+                candidates = await self._router.candidates("gemini")
+            except NoAccountAvailable:
+                return []
+
+            last_error = "no attempts"
+            for acct in candidates:
+                try:
+                    response = await self._client.get(
+                        f"{self._settings.gemini_base_url}/models",
+                        headers=build_gemini_headers(acct, stream=False),
+                        timeout=30.0,
+                    )
+                except httpx.HTTPError as exc:
+                    last_error = f"{acct.id}: {exc}"
+                    continue
+                if response.status_code == 200:
+                    models = (response.json() or {}).get("data") or []
+                    self._gemini_raw = [
+                        model for model in models
+                        if isinstance(model, dict) and self._gemini_chat_model(model)
+                    ]
+                    self._gemini_fetched_at = time.time()
+                    return [self._gemini_to_openai(model) for model in self._gemini_raw]
+                last_error = f"{acct.id}: HTTP {response.status_code}"
+
+            if self._gemini_raw:
+                log.warning("Gemini model refresh failed (%s); serving stale cache", last_error)
+                return [self._gemini_to_openai(model) for model in self._gemini_raw]
+            log.warning("Gemini models unavailable (%s)", last_error)
+            return []
+
+    @staticmethod
+    def _gemini_chat_model(model: dict) -> bool:
+        model_id = str(model.get("id") or "").lower()
+        return model_id.startswith("gemini-") and not any(
+            token in model_id for token in ("embedding", "imagen", "veo", "aqa")
+        )
+
+    @staticmethod
+    def _gemini_to_openai(model: dict) -> dict:
+        model_id = str(model.get("id") or "")
+        return {
+            **model,
+            "id": f"gemini/{model_id}",
+            "object": "model",
+            "owned_by": model.get("owned_by") or "google",
+            "display_name": model.get("name") or model_id,
+            "gateway": "gemini",
+            "supported_in_api": True,
+            "supported_endpoints": ["/v1/chat/completions"],
         }

@@ -48,6 +48,12 @@ class OpenCodeGoKeyCreate(BaseModel):
     )
 
 
+class GeminiKeyCreate(OpenCodeGoKeyCreate):
+    """A Google AI Studio API key to add to the Gemini account pool."""
+
+    api_key: str = Field(description="Google Gemini API key.")
+
+
 class AccountStatus(BaseModel):
     id: str
     provider: str = "codex"

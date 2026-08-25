@@ -196,6 +196,21 @@ class OpenCodeGoAccount:
         return None
 
 
+class GeminiAccount(OpenCodeGoAccount):
+    """Google Gemini account backed by an AI Studio API key."""
+
+    provider = "gemini"
+
+    def __init__(self, path: Optional[Path], data: dict, settings: Settings, acct_id: str = ""):
+        normalized = dict(data)
+        normalized["api_key"] = data.get("api_key") or data.get("GEMINI_API_KEY")
+        super().__init__(path, normalized, settings, acct_id or (path.stem if path else "gemini"))
+
+    @property
+    def plan(self) -> str:
+        return "gemini-api"
+
+
 class XAIAccount:
     """Grok subscription account backed by xAI OAuth tokens."""
 
@@ -373,6 +388,11 @@ def _is_opencode_go(data: dict) -> bool:
     return provider == "opencode-go" or "api_key" in data or "OPENCODE_GO_API_KEY" in data
 
 
+def _is_gemini(data: dict) -> bool:
+    provider = str(data.get("provider") or data.get("type") or "").lower().replace("_", "-")
+    return provider in ("gemini", "google-gemini") or "GEMINI_API_KEY" in data
+
+
 def _is_xai(data: dict) -> bool:
     provider = str(data.get("provider") or data.get("type") or "").lower().replace("_", "-")
     return provider in ("xai", "xai-oauth", "grok", "grok-oauth") or "XAI_API_KEY" in data
@@ -387,6 +407,8 @@ def _account_from_data(path: Path, data: dict, settings: Settings):
         return CursorAccount(path, data, settings)
     if _is_xai(data):
         return XAIAccount(path, data, settings)
+    if _is_gemini(data):
+        return GeminiAccount(path, data, settings)
     if _is_opencode_go(data):
         return OpenCodeGoAccount(path, data, settings)
     return CodexAccount(path, data, settings)
@@ -398,6 +420,18 @@ def _env_opencode_go_accounts(settings: Settings) -> list[OpenCodeGoAccount]:
         acct_id = f"opencode-go-env-{idx}"
         try:
             accounts.append(OpenCodeGoAccount(None, {"api_key": api_key}, settings, acct_id=acct_id))
+        except CredentialError as exc:
+            log.error("skipping %s: %s", acct_id, exc)
+    return accounts
+
+
+def _env_gemini_accounts(settings: Settings) -> list[GeminiAccount]:
+    accounts: list[GeminiAccount] = []
+    keys = filter(None, (key.strip() for key in settings.gemini_api_keys.split(",")))
+    for idx, api_key in enumerate(keys, 1):
+        acct_id = f"gemini-env-{idx}"
+        try:
+            accounts.append(GeminiAccount(None, {"api_key": api_key}, settings, acct_id=acct_id))
         except CredentialError as exc:
             log.error("skipping %s: %s", acct_id, exc)
     return accounts
@@ -415,6 +449,7 @@ def load_accounts(settings: Settings) -> list:
         except (json.JSONDecodeError, CredentialError) as exc:
             log.error("skipping %s: %s", path.name, exc)
     accounts.extend(_env_opencode_go_accounts(settings))
+    accounts.extend(_env_gemini_accounts(settings))
 
     if not accounts:
         # Allowed: the gateway can boot empty and have accounts uploaded via the

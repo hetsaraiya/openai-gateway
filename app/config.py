@@ -34,6 +34,9 @@ class Settings:
     # gateway uses OpenAI-compatible chat completions or Anthropic Messages.
     opencode_go_base_url: str = "https://opencode.ai/zen/go/v1"
     opencode_go_api_keys: str = ""
+    # Google Gemini's official OpenAI-compatible endpoint.
+    gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta/openai"
+    gemini_api_keys: str = ""
     # Grok subscription endpoint and OAuth client used by the official CLI.
     xai_base_url: str = "https://cli-chat-proxy.grok.com/v1"
     xai_oauth_issuer: str = "https://auth.x.ai"
@@ -90,6 +93,11 @@ def get_settings() -> Settings:
             "OPENCODE_GO_BASE_URL", default="https://opencode.ai/zen/go/v1"
         ).rstrip("/"),
         opencode_go_api_keys=config("OPENCODE_GO_API_KEYS", default=""),
+        gemini_base_url=config(
+            "GEMINI_BASE_URL",
+            default="https://generativelanguage.googleapis.com/v1beta/openai",
+        ).rstrip("/"),
+        gemini_api_keys=config("GEMINI_API_KEYS", default=""),
         xai_base_url=config(
             "XAI_BASE_URL", default="https://cli-chat-proxy.grok.com/v1"
         ).rstrip("/"),
