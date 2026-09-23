@@ -59,7 +59,7 @@ class Settings:
     openai_beta: str = "responses=experimental"
     # Sent as ?client_version= when listing models (the backend gates models on
     # a minimum client version). Defaults to a recent Codex CLI release.
-    codex_client_version: str = "0.145.0"
+    codex_client_version: str = "0.156.1"
     # How long to trust the fetched model catalog before revalidating (seconds).
     models_cache_ttl: int = 3600
 
