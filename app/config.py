@@ -59,7 +59,7 @@ class Settings:
     openai_beta: str = "responses=experimental"
     # Sent as ?client_version= when listing models (the backend gates models on
     # a minimum client version). Defaults to a recent Codex CLI release.
-    codex_client_version: str = "0.156.1"
+    codex_client_version: str = "0.158.0"
     # How long to trust the fetched model catalog before revalidating (seconds).
     models_cache_ttl: int = 3600
 
@@ -121,7 +121,7 @@ def get_settings() -> Settings:
         token_refresh_skew=config("TOKEN_REFRESH_SKEW", default=300, cast=int),
         originator=config("CODEX_ORIGINATOR", default="codex_cli_rs"),
         openai_beta=config("CODEX_OPENAI_BETA", default="responses=experimental"),
-        codex_client_version=config("CODEX_CLIENT_VERSION", default="0.145.0"),
+        codex_client_version=config("CODEX_CLIENT_VERSION", default="0.158.0"),
         models_cache_ttl=config("MODELS_CACHE_TTL", default=3600, cast=int),
         strategy=config("ROUTING_STRATEGY", default="fallback"),
         rate_limit_cooldown=config("RATE_LIMIT_COOLDOWN", default=60, cast=int),
