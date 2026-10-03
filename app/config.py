@@ -45,7 +45,7 @@ class Settings:
     xai_oauth_issuer: str = "https://auth.x.ai"
     xai_oauth_client_id: str = DEFAULT_XAI_CLIENT_ID
     xai_oauth_scopes: str = DEFAULT_XAI_SCOPES
-    grok_client_version: str = "0.2.112"
+    grok_client_version: str = "1.0.46"
     # Where access tokens are refreshed.
     oauth_token_url: str = "https://auth.openai.com/oauth/token"
     oauth_client_id: str = DEFAULT_CODEX_CLIENT_ID
@@ -59,7 +59,7 @@ class Settings:
     openai_beta: str = "responses=experimental"
     # Sent as ?client_version= when listing models (the backend gates models on
     # a minimum client version). Defaults to a recent Codex CLI release.
-    codex_client_version: str = "0.158.0"
+    codex_client_version: str = "0.160.0"
     # How long to trust the fetched model catalog before revalidating (seconds).
     models_cache_ttl: int = 3600
 
@@ -111,7 +111,7 @@ def get_settings() -> Settings:
         xai_oauth_issuer=config("XAI_OAUTH_ISSUER", default="https://auth.x.ai").rstrip("/"),
         xai_oauth_client_id=config("XAI_OAUTH_CLIENT_ID", default=DEFAULT_XAI_CLIENT_ID),
         xai_oauth_scopes=config("XAI_OAUTH_SCOPES", default=DEFAULT_XAI_SCOPES),
-        grok_client_version=config("GROK_CLIENT_VERSION", default="0.2.112"),
+        grok_client_version=config("GROK_CLIENT_VERSION", default="1.0.46"),
         oauth_token_url=config(
             "OAUTH_TOKEN_URL", default="https://auth.openai.com/oauth/token"
         ),
@@ -121,7 +121,7 @@ def get_settings() -> Settings:
         token_refresh_skew=config("TOKEN_REFRESH_SKEW", default=300, cast=int),
         originator=config("CODEX_ORIGINATOR", default="codex_cli_rs"),
         openai_beta=config("CODEX_OPENAI_BETA", default="responses=experimental"),
-        codex_client_version=config("CODEX_CLIENT_VERSION", default="0.158.0"),
+        codex_client_version=config("CODEX_CLIENT_VERSION", default="0.160.0"),
         models_cache_ttl=config("MODELS_CACHE_TTL", default=3600, cast=int),
         strategy=config("ROUTING_STRATEGY", default="fallback"),
         rate_limit_cooldown=config("RATE_LIMIT_COOLDOWN", default=60, cast=int),

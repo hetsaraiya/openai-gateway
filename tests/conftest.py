@@ -37,8 +37,8 @@ def make_settings(strategy="fallback", **kw) -> Settings:
         xai_oauth_scopes=kw.get(
             "xai_oauth_scopes", "openid profile email offline_access grok-cli:access api:access"
         ),
-        grok_client_version=kw.get("grok_client_version", "0.2.112"),
-        codex_client_version=kw.get("codex_client_version", "0.145.0"),
+        grok_client_version=kw.get("grok_client_version", "1.0.46"),
+        codex_client_version=kw.get("codex_client_version", "0.160.0"),
         models_cache_ttl=kw.get("models_cache_ttl", 3600),
     )
 

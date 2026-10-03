@@ -20,7 +20,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 FROM node:22-bookworm-slim AS web-builder
 
 ARG TARGETARCH
-ARG CODEX_VERSION=0.145.0
+ARG CODEX_VERSION=0.160.0
 ARG CURSOR_VERSION=2026.07.23-e383d2b
 
 WORKDIR /web

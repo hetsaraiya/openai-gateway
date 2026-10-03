@@ -64,7 +64,7 @@ async def test_xai_oauth_refresh_rotates_and_persists_tokens(tmp_path):
 
     async def handler(request: httpx.Request) -> httpx.Response:
         assert request.url == "https://auth.xai.test/oauth2/token"
-        assert request.headers["x-grok-client-version"] == "0.2.112"
+        assert request.headers["x-grok-client-version"] == "1.0.46"
         assert request.content.decode() == (
             "grant_type=refresh_token&refresh_token=refresh-xai&client_id=xai-client"
         )
@@ -91,7 +91,7 @@ async def test_xai_device_login_uses_official_flow_and_saves_subscription(tmp_pa
 
     def handler(request: httpx.Request) -> httpx.Response:
         calls.append(request)
-        assert request.headers["x-grok-client-version"] == "0.2.112"
+        assert request.headers["x-grok-client-version"] == "1.0.46"
         if request.url.path.endswith("/device/code"):
             return httpx.Response(200, json={
                 "device_code": "device-secret",
@@ -151,7 +151,7 @@ async def test_xai_chat_uses_subscription_headers_and_cache_affinity(tmp_path, q
     assert seen["headers"]["x-xai-token-auth"] == "xai-grok-cli"
     assert seen["headers"]["x-grok-client-identifier"] == "grok-shell"
     assert seen["headers"]["x-authenticateresponse"] == "authenticate-response"
-    assert seen["headers"]["user-agent"].startswith("grok-pager/0.2.112")
+    assert seen["headers"]["user-agent"].startswith("grok-pager/1.0.46")
     assert seen["headers"]["x-grok-model-override"] == "grok-4.5"
     assert seen["headers"]["x-grok-conv-id"] == "conversation-123"
     assert seen["headers"]["x-userid"] == "user-123"
